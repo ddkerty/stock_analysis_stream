@@ -1,4 +1,4 @@
-# stock_analysis.py (get_operating_margin_trend 개선: 컬럼명 탐색, 기간 파라미터화)
+# stock_analysis.py (if __name__ == "__main__" 블록 SyntaxError 수정)
 
 import os
 import logging
@@ -21,7 +21,7 @@ from prophet.plot import plot_cross_validation_metric
 import matplotlib.pyplot as plt
 import warnings
 import locale
-import re # 정규 표현식 사용 위해 추가
+import re
 
 warnings.simplefilter(action='ignore', category=FutureWarning)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -51,16 +51,17 @@ if NEWS_API_KEY and FRED_API_KEY: logging.info("API 키 로드 시도 완료.")
 
 
 # --- 데이터 가져오기 함수들 ---
-# get_fear_greed_index, get_stock_data, get_macro_data 함수는 이전과 동일하게 유지
-# ... (이전 답변의 get_fear_greed_index, get_stock_data, get_macro_data 코드 붙여넣기) ...
+# get_fear_greed_index, get_stock_data, get_macro_data, get_fundamental_data, find_financial_statement_item, get_operating_margin_trend, get_roe_trend
+# 함수들은 이전 답변의 최종 버전과 동일하게 유지됩니다.
+# ... (이전 답변에서 제공된 함수 정의들을 여기에 붙여넣으세요) ...
 def get_fear_greed_index():
     """공포-탐욕 지수를 API에서 가져옵니다."""
     url = "https://api.alternative.me/fng/?limit=1&format=json&date_format=world"
     try:
         response = requests.get(url, timeout=10); response.raise_for_status()
         data = response.json()['data'][0]; value = int(data['value']); classification = data['value_classification']
-        logging.info(f"공포-탐욕 지수 가져오기 성공: {value} ({classification})"); return value, classification
-    except Exception as e: logging.error(f"공포-탐욕 지수 오류: {e}"); return None, None
+        logging.info(f"F&G 성공: {value} ({classification})"); return value, classification
+    except Exception as e: logging.error(f"F&G 오류: {e}"); return None, None
 
 def get_stock_data(ticker, start_date=None, end_date=None, period="1y"):
     """지정된 종목의 주가 데이터를 yfinance로 가져옵니다."""
@@ -97,20 +98,16 @@ def get_macro_data(start_date, end_date=None, fred_key=None):
             if not df_macro.empty: df_macro = df_macro.merge(fedfunds, left_index=True, right_index=True, how='outer')
             else: df_macro = pd.DataFrame(fedfunds)
             logging.info("FRED 데이터 병합/가져오기 성공")
-        except Exception as e: logging.error(f"FRED 데이터 실패: {e}"); # Fallback logic for FedFunds column if needed
+        except Exception as e: logging.error(f"FRED 데이터 실패: {e}");
     else: logging.warning("FRED 키 없어 FRED 데이터 스킵.")
     if not df_macro.empty:
-        if 'FedFunds' not in df_macro.columns: df_macro['FedFunds'] = pd.NA # Ensure FedFunds column exists if skipped/failed
+        if 'FedFunds' not in df_macro.columns: df_macro['FedFunds'] = pd.NA
         df_macro.index = pd.to_datetime(df_macro.index).tz_localize(None)
         df_macro = df_macro.sort_index().ffill().bfill().reset_index().rename(columns={'index': 'Date'}); df_macro["Date"] = pd.to_datetime(df_macro["Date"])
         logging.info("매크로 데이터 처리 완료."); return df_macro
     else: logging.warning("매크로 데이터 가져오기 실패."); return pd.DataFrame()
 
-
-# --- 기본적 분석 데이터 가져오기 함수 ---
-
 def format_market_cap(mc):
-    # ... (이전과 동일) ...
     """시가총액 숫자를 읽기 쉬운 문자열(T/B/M 단위)로 변환합니다."""
     if isinstance(mc, (int, float)) and mc > 0:
         if mc >= 1e12: return f"${mc / 1e12:.2f} T"
@@ -120,7 +117,6 @@ def format_market_cap(mc):
     return "N/A"
 
 def get_fundamental_data(ticker):
-    # ... (이전과 동일) ...
     """yfinance의 .info를 사용하여 주요 기본적 분석 지표를 가져옵니다."""
     logging.info(f"{ticker}: 기본 정보(.info) 가져오기 시도...")
     fundamentals = {key: "N/A" for key in ["시가총액", "PER", "EPS", "배당수익률", "베타", "업종", "산업", "요약"]}
@@ -138,28 +134,24 @@ def get_fundamental_data(ticker):
         logging.info(f"{ticker} 기본 정보 가져오기 성공."); return fundamentals
     except Exception as e: logging.error(f"{ticker} 기본 정보(.info) 실패: {e}"); return fundamentals
 
-# stock_analysis.py 파일에 아래 함수 추가
-
-import numpy as np # 숫자 계산 및 NaN 처리 위해 추가
-import re # 컬럼명 탐색 위해 추가
-
-# (find_financial_statement_item 헬퍼 함수는 이미 있다고 가정, 없다면 이전 답변 참고하여 추가)
 def find_financial_statement_item(index, keywords, contains_mode=True, case_sensitive=False):
     """재무제표 인덱스에서 키워드를 포함하거나 일치하는 항목 이름을 찾습니다."""
     if not isinstance(index, pd.Index): return None
     pattern = r'\s*'.join(keywords); flags = 0 if case_sensitive else re.IGNORECASE
     for item in index:
+        item_str = str(item) # Ensure item is string for regex
         if contains_mode:
              try:
-                  if re.search(pattern, item, flags=flags): return item
+                  if re.search(pattern, item_str, flags=flags): return item
              except TypeError: continue
         else:
-            cleaned_item = re.sub(r'\W+', '', str(item)).lower(); cleaned_pattern = re.sub(r'\W+', '', ''.join(keywords)).lower()
+            cleaned_item = re.sub(r'\W+', '', item_str).lower(); cleaned_pattern = re.sub(r'\W+', '', ''.join(keywords)).lower()
             if cleaned_item == cleaned_pattern: return item
     first_keyword_pattern = keywords[0]
     for item in index:
+         item_str = str(item)
          try:
-              if re.search(first_keyword_pattern, item, flags=flags): logging.warning(f"정확 항목명 매칭 실패. '{keywords}' 대신 '{item}' 시도."); return item
+              if re.search(first_keyword_pattern, item_str, flags=flags): logging.warning(f"정확 항목명 매칭 실패. '{keywords}' 대신 '{item}' 시도."); return item
          except TypeError: continue
     return None
 
@@ -168,159 +160,45 @@ def get_roe_trend(ticker, num_periods=4):
     logging.info(f"{ticker}: 분기별 ROE 추세 가져오기 시도 (최근 {num_periods} 분기)...")
     try:
         stock = yf.Ticker(ticker)
-        # 분기별 손익계산서 및 대차대조표 가져오기
-        qf = stock.quarterly_financials
-        qbs = stock.quarterly_balance_sheet
-
-        if qf.empty or qbs.empty:
-            logging.warning(f"{ticker}: 분기별 재무 또는 대차대조표 데이터 없음.")
-            return None
-
-        # 필요한 항목 이름 찾기 (유연하게)
-        # 순이익: Net Income, Net Income From Continuing Operations 등
+        qf = stock.quarterly_financials; qbs = stock.quarterly_balance_sheet
+        if qf.empty or qbs.empty: logging.warning(f"{ticker}: 분기 재무/대차대조표 데이터 없음."); return None
         net_income_col = find_financial_statement_item(qf.index, ['Net', 'Income'])
-        # 자본총계: Stockholders Equity, Total Equity Gross Minority Interest 등
-        equity_col = find_financial_statement_item(qbs.index, ['Stockholder', 'Equity']) or \
-                     find_financial_statement_item(qbs.index, ['Total', 'Equity', 'Gross'])
-
-        if not net_income_col or not equity_col:
-             logging.warning(f"{ticker}: 순이익('{net_income_col}') 또는 자본총계('{equity_col}') 항목 찾기 실패.")
-             # logging.debug(f"손익계산서 항목: {qf.index.tolist()}")
-             # logging.debug(f"대차대조표 항목: {qbs.index.tolist()}")
-             return None
-
-        # 최신 N개 분기 데이터 선택 및 정렬
+        equity_col = find_financial_statement_item(qbs.index, ['Stockholder', 'Equity']) or find_financial_statement_item(qbs.index, ['Total', 'Equity', 'Gross'])
+        if not net_income_col or not equity_col: logging.warning(f"{ticker}: 순이익('{net_income_col}') 또는 자본총계('{equity_col}') 항목 찾기 실패."); return None
         qf_recent = qf.loc[[net_income_col]].iloc[:, :num_periods].T
         qbs_recent = qbs.loc[[equity_col]].iloc[:, :num_periods].T
-
-        # 두 데이터프레임의 인덱스(날짜)를 기준으로 합치기 (Outer join으로 최대한 살림)
         df_trend = pd.merge(qf_recent, qbs_recent, left_index=True, right_index=True, how='outer')
-        df_trend.index = pd.to_datetime(df_trend.index)
-        df_trend = df_trend.sort_index(ascending=True)
-
-        # 숫자형 변환 및 오류 처리
+        df_trend.index = pd.to_datetime(df_trend.index); df_trend = df_trend.sort_index(ascending=True)
         df_trend[net_income_col] = pd.to_numeric(df_trend[net_income_col], errors='coerce')
         df_trend[equity_col] = pd.to_numeric(df_trend[equity_col], errors='coerce')
-
-        # ROE 계산: 순이익 / 자본총계 * 100
-        # 자본총계가 0 이하인 경우 계산 불가 (NaN 처리)
-        df_trend[equity_col] = df_trend[equity_col].apply(lambda x: x if x > 0 else np.nan)
-        df_trend.dropna(subset=[net_income_col, equity_col], inplace=True) # 계산 불가능 행 제거
-
-        if df_trend.empty:
-             logging.warning(f"{ticker}: ROE 계산 가능한 데이터 부족.")
-             return None
-
-        df_trend['ROE (%)'] = (df_trend[net_income_col] / df_trend[equity_col]) * 100
-        df_trend['ROE (%)'] = df_trend['ROE (%)'].round(2)
-
-        # 결과 포맷팅
-        result_trend = df_trend[['ROE (%)']].reset_index()
-        result_trend.rename(columns={'index': 'Date'}, inplace=True)
+        df_trend[equity_col] = df_trend[equity_col].apply(lambda x: x if pd.notna(x) and x > 0 else np.nan) # NaN 체크 추가
+        df_trend.dropna(subset=[net_income_col, equity_col], inplace=True)
+        if df_trend.empty: logging.warning(f"{ticker}: ROE 계산 가능 데이터 부족."); return None
+        df_trend['ROE (%)'] = (df_trend[net_income_col] / df_trend[equity_col]) * 100; df_trend['ROE (%)'] = df_trend['ROE (%)'].round(2)
+        result_trend = df_trend[['ROE (%)']].reset_index().rename(columns={'index': 'Date'})
         result_trend['Date'] = result_trend['Date'].dt.strftime('%Y-%m-%d')
-
-        logging.info(f"{ticker}: 최근 {len(result_trend)}개 분기 ROE(%) 추세 계산 완료.")
-        return result_trend.to_dict('records')
-
-    except Exception as e:
-        logging.error(f"{ticker}: ROE 추세 계산 중 오류: {e}")
-        # logging.error(traceback.format_exc()) # 상세 디버깅 시
-        return None
-# --- 🍀 영업이익률 추세 계산 함수 (개선 버전) ---
-
-def find_financial_statement_item(index, keywords, contains_mode=True, case_sensitive=False):
-    """재무제표 인덱스에서 키워드를 포함하거나 일치하는 항목 이름을 찾습니다."""
-    if not isinstance(index, pd.Index): return None
-
-    # 정규식 패턴 생성 (공백/특수문자 무시, 대소문자 구분 옵션)
-    pattern = r'\s*'.join(keywords) # 키워드 사이에 유연한 공백 허용
-    flags = 0 if case_sensitive else re.IGNORECASE
-
-    for item in index:
-        if contains_mode:
-            # 키워드가 순서대로 포함되는지 확인 (더 유연)
-             try:
-                  if re.search(pattern, item, flags=flags):
-                       return item
-             except TypeError: # 인덱스에 숫자가 섞여있을 경우 대비
-                  continue
-        else:
-            # 키워드와 거의 일치하는지 확인 (덜 유연)
-            cleaned_item = re.sub(r'\W+', '', item).lower() # 특수문자/공백 제거, 소문자화
-            cleaned_pattern = re.sub(r'\W+', '', ''.join(keywords)).lower()
-            if cleaned_item == cleaned_pattern:
-                return item
-
-    # 직접적인 키워드 매칭 실패 시, 첫 번째 키워드만으로 포함 검색 시도 (Fallback)
-    first_keyword_pattern = keywords[0]
-    for item in index:
-         try:
-              if re.search(first_keyword_pattern, item, flags=flags):
-                  logging.warning(f"정확한 항목명 매칭 실패. '{keywords}' 대신 '{item}' 사용 시도.")
-                  return item
-         except TypeError:
-              continue
-
-    return None # 최종적으로 못 찾으면 None 반환
-
+        logging.info(f"{ticker}: 최근 {len(result_trend)}개 분기 ROE(%) 추세 계산 완료."); return result_trend.to_dict('records')
+    except Exception as e: logging.error(f"{ticker}: ROE 추세 계산 오류: {e}"); return None
 
 def get_operating_margin_trend(ticker, num_periods=4):
     """최근 분기별 영업이익률 추세를 계산하여 반환합니다 (딕셔너리 리스트)."""
     logging.info(f"{ticker}: 분기별 영업이익률 추세 가져오기 시도 (최근 {num_periods} 분기)...")
     try:
-        stock = yf.Ticker(ticker)
-        qf = stock.quarterly_financials # 분기별 손익계산서
-
-        if qf.empty: logging.warning(f"{ticker}: 분기별 재무 데이터 없음."); return None
-
-        # --- 개선된 컬럼명 탐색 로직 ---
-        # 다양한 이름 형식에 대응 ('Total Revenue', 'Revenue', 'Total Operating Revenue' 등)
-        revenue_col = find_financial_statement_item(qf.index, ['Total', 'Revenue']) or \
-                      find_financial_statement_item(qf.index, ['Revenue'])
-        # ('Operating Income', 'Operating Income Loss', 'OperatingIncome')
-        op_income_col = find_financial_statement_item(qf.index, ['Operating', 'Income']) or \
-                        find_financial_statement_item(qf.index, ['OperatingIncome'])
-        # -------------------------------
-
-        if not revenue_col or not op_income_col:
-             logging.warning(f"{ticker}: 분기 재무 데이터에서 매출 또는 영업이익 항목 찾기 실패.")
-             logging.debug(f"찾으려는 항목: Total Revenue({revenue_col}), Operating Income({op_income_col})")
-             # logging.debug(f"사용 가능한 항목: {qf.index.tolist()}")
-             return None
-
-        # 데이터 선택 및 처리 (최신순 컬럼 가정)
-        qf_recent = qf.iloc[:, :num_periods]
-        df_trend = qf_recent.loc[[revenue_col, op_income_col]].T
-        df_trend.index = pd.to_datetime(df_trend.index)
-        df_trend = df_trend.sort_index(ascending=True)
-
-        df_trend[revenue_col] = pd.to_numeric(df_trend[revenue_col], errors='coerce')
-        df_trend[op_income_col] = pd.to_numeric(df_trend[op_income_col], errors='coerce')
-
-        df_trend.replace(0, np.nan, inplace=True)
-        df_trend.dropna(subset=[revenue_col, op_income_col], inplace=True)
-
+        stock = yf.Ticker(ticker); qf = stock.quarterly_financials
+        if qf.empty: logging.warning(f"{ticker}: 분기 재무 데이터 없음."); return None
+        revenue_col = find_financial_statement_item(qf.index, ['Total', 'Revenue']) or find_financial_statement_item(qf.index, ['Revenue'])
+        op_income_col = find_financial_statement_item(qf.index, ['Operating', 'Income']) or find_financial_statement_item(qf.index, ['OperatingIncome'])
+        if not revenue_col or not op_income_col: logging.warning(f"{ticker}: 매출/영업이익 항목 찾기 실패."); return None
+        qf_recent = qf.iloc[:, :num_periods]; df_trend = qf_recent.loc[[revenue_col, op_income_col]].T
+        df_trend.index = pd.to_datetime(df_trend.index); df_trend = df_trend.sort_index(ascending=True)
+        df_trend[revenue_col] = pd.to_numeric(df_trend[revenue_col], errors='coerce'); df_trend[op_income_col] = pd.to_numeric(df_trend[op_income_col], errors='coerce')
+        df_trend.replace(0, np.nan, inplace=True); df_trend.dropna(subset=[revenue_col, op_income_col], inplace=True)
         if df_trend.empty: logging.warning(f"{ticker}: 영업이익률 계산 가능 데이터 부족."); return None
+        df_trend['Operating Margin (%)'] = (df_trend[op_income_col] / df_trend[revenue_col]) * 100; df_trend['Operating Margin (%)'] = df_trend['Operating Margin (%)'].round(2)
+        result_trend = df_trend[['Operating Margin (%)']].reset_index().rename(columns={'index': 'Date'}); result_trend['Date'] = result_trend['Date'].dt.strftime('%Y-%m-%d')
+        logging.info(f"{ticker}: 최근 {len(result_trend)}개 분기 영업이익률 추세 계산 완료."); return result_trend.to_dict('records')
+    except Exception as e: logging.error(f"{ticker}: 영업이익률 추세 계산 오류: {e}"); return None
 
-        # 영업이익률 계산 (%)
-        df_trend['Operating Margin (%)'] = (df_trend[op_income_col] / df_trend[revenue_col]) * 100
-        df_trend['Operating Margin (%)'] = df_trend['Operating Margin (%)'].round(2)
-
-        result_trend = df_trend[['Operating Margin (%)']].reset_index()
-        result_trend.rename(columns={'index': 'Date'}, inplace=True)
-        result_trend['Date'] = result_trend['Date'].dt.strftime('%Y-%m-%d')
-
-        logging.info(f"{ticker}: 최근 {len(result_trend)}개 분기 영업이익률 추세 계산 완료.")
-        return result_trend.to_dict('records')
-
-    except Exception as e:
-        logging.error(f"{ticker}: 영업이익률 추세 계산 중 오류: {e}")
-        return None
-
-# --- 기존 분석 및 시각화 함수들 ---
-
-# plot_stock_chart, get_news_sentiment, run_prophet_forecast 함수는 이전과 동일하게 유지
-# ... (이전 답변의 plot_stock_chart, get_news_sentiment, run_prophet_forecast 코드 붙여넣기) ...
 def plot_stock_chart(ticker, start_date=None, end_date=None, period="1y"):
     """주가 데이터를 기반으로 차트 Figure 객체를 생성하여 반환합니다."""
     df = get_stock_data(ticker, start_date=start_date, end_date=end_date, period=period)
@@ -351,8 +229,7 @@ def get_news_sentiment(ticker, api_key):
                 except Exception as text_err: output_lines.append(f"{i}. {title} | 감정 분석 오류")
             else: output_lines.append(f"{i}. {title} | 내용 없음")
         avg_pol = total_polarity / analyzed_count if analyzed_count > 0 else 0
-        logging.info(f"{ticker} 뉴스 감정 분석 완료 (평균: {avg_pol:.2f})")
-        output_lines.insert(0, f"총 {analyzed_count}개 뉴스 분석 | 평균 감성 점수: {avg_pol:.2f}"); return output_lines
+        logging.info(f"{ticker} 뉴스 감정 분석 완료 (평균: {avg_pol:.2f})"); output_lines.insert(0, f"총 {analyzed_count}개 뉴스 분석 | 평균 감성 점수: {avg_pol:.2f}"); return output_lines
     except requests.exceptions.RequestException as e: return [f"뉴스 API 요청 실패: {e}"]
     except Exception as e: logging.error(f"뉴스 분석 오류: {e}"); return ["뉴스 분석 중 오류 발생."]
 
@@ -408,7 +285,7 @@ def run_prophet_forecast(ticker, start_date, end_date=None, forecast_days=30, fr
                     future[col] = future[col].ffill().fillna(last_val)
         forecast = m.predict(future); logging.info("미래 예측 완료.")
         csv_fn = os.path.join(FORECAST_FOLDER, f"{ticker}_forecast_data.csv")
-        forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].copy().assign(ds=lambda df: df['ds'].dt.strftime('%Y-%m-%d')).to_csv(csv_fn, index=False)
+        forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].copy().assign(ds=lambda dfx: dfx['ds'].dt.strftime('%Y-%m-%d')).to_csv(csv_fn, index=False) # lambda df: -> lambda dfx:
         logging.info(f"예측 데이터 저장: {csv_fn}")
         fig_forecast = plot_plotly(m, forecast); fig_forecast.update_layout(title=f'{ticker} Price Forecast', margin=dict(l=20, r=20, t=40, b=20)); logging.info(f"예측 Figure 생성 완료.")
         forecast_result_dict = forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(forecast_days).to_dict('records')
@@ -416,9 +293,10 @@ def run_prophet_forecast(ticker, start_date, end_date=None, forecast_days=30, fr
         return forecast_result_dict, fig_forecast, cv_plot_path
     except Exception as e: logging.error(f"Prophet 학습/예측 오류: {e}"); logging.error(traceback.format_exc()); return None, None, None
 
+
 # --- 메인 분석 함수 ---
 
-# 7. 통합 분석 - num_trend_periods 인자 추가 및 전달
+# 7. 통합 분석 - num_trend_periods 인자 추가 및 전달, roe_trend 추가
 def analyze_stock(ticker, news_key, fred_key, analysis_period_years=2, forecast_days=30, num_trend_periods=4): # num_trend_periods 추가
     """모든 데이터를 종합하여 주식 분석 결과를 반환합니다."""
     logging.info(f"--- {ticker} 주식 분석 시작 ---")
@@ -444,9 +322,7 @@ def analyze_stock(ticker, news_key, fred_key, analysis_period_years=2, forecast_
     output_results['stock_chart_fig'] = stock_chart_fig
 
     output_results['fundamentals'] = get_fundamental_data(ticker)
-    # --- 영업이익률 추세 호출 시 num_periods 전달 ---
     output_results['operating_margin_trend'] = get_operating_margin_trend(ticker, num_periods=num_trend_periods)
-    # -----------------------------------------
     # --- 🍀 ROE 추세 데이터 추가 ---
     output_results['roe_trend'] = get_roe_trend(ticker, num_periods=num_trend_periods)
     # -----------------------------
@@ -468,27 +344,40 @@ def analyze_stock(ticker, news_key, fred_key, analysis_period_years=2, forecast_
 
     logging.info(f"--- {ticker} 주식 분석 완료 ---")
     return output_results
-elif key == 'roe_trend' and isinstance(value, list): print(f"- {key.replace('_', ' ').title()}: {len(value)} 분기 데이터"); [print(f"    - {item}") for item in value]
 
 
-
-
-# --- 메인 실행 부분 (직접 실행 시 테스트용) ---
+# --- 메인 실행 부분 (직접 실행 시 테스트용 - ⭐️ 수정된 부분 확인) ---
 if __name__ == "__main__":
-    # ... (이전과 동일, 테스트 출력 부분에 op margin 추가됨) ...
     print(f"stock_analysis.py 직접 실행 (테스트 목적, Base directory: {BASE_DIR}).")
     target_ticker = "AAPL"
     news_api_key_local = os.getenv("NEWS_API_KEY"); fred_api_key_local = os.getenv("FRED_API_KEY")
     if not news_api_key_local or not fred_api_key_local: print("경고: 로컬 테스트 API 키 없음."); test_results = None
-    else: test_results = analyze_stock(ticker=target_ticker, news_key=news_api_key_local, fred_key=fred_api_key_local, analysis_period_years=1, forecast_days=15, num_trend_periods=5) # 테스트 시 5분기 요청
+    else: test_results = analyze_stock(ticker=target_ticker, news_key=news_api_key_local, fred_key=fred_api_key_local, analysis_period_years=1, forecast_days=15, num_trend_periods=5)
     print("\n--- 테스트 실행 결과 요약 ---")
     if test_results:
         for key, value in test_results.items():
-             if 'fig' in key and value is not None: print(f"- {key.replace('_', ' ').title()}: Plotly Figure 객체 생성됨")
-             elif key == 'fundamentals' and isinstance(value, dict): print(f"- {key.replace('_', ' ').title()}:"); [print(f"    - {f_key}: {f_value}") for f_key, f_value in value.items()]
-             elif key == 'operating_margin_trend' and isinstance(value, list): print(f"- {key.replace('_', ' ').title()}: {len(value)} 분기 데이터"); [print(f"    - {item}") for item in value]
-             elif key == 'prophet_forecast': print(f"- {key.replace('_', ' ').title()}: {type(value)}")
-             elif key == 'news_sentiment': print(f"- {key.replace('_', ' ').title()}: {len(value) if isinstance(value, list) else 0} 항목")
-             else: print(f"- {key.replace('_', ' ').title()}: {value}")
+            if 'fig' in key and value is not None:
+                print(f"- {key.replace('_', ' ').title()}: Plotly Figure 객체 생성됨")
+            elif key == 'fundamentals' and isinstance(value, dict):
+                print(f"- {key.replace('_', ' ').title()}:")
+                # 표준 for 반복문 사용
+                for f_key, f_value in value.items():
+                     print(f"    - {f_key}: {f_value}")
+            elif key == 'operating_margin_trend' and isinstance(value, list):
+                print(f"- {key.replace('_', ' ').title()}: {len(value)} 분기 데이터")
+                # 표준 for 반복문 사용
+                for item in value:
+                     print(f"    - {item}")
+            elif key == 'roe_trend' and isinstance(value, list): # ROE 출력 추가
+                print(f"- {key.replace('_', ' ').title()}: {len(value)} 분기 데이터")
+                # 표준 for 반복문 사용
+                for item in value:
+                     print(f"    - {item}")
+            elif key == 'prophet_forecast':
+                print(f"- {key.replace('_', ' ').title()}: {type(value)}")
+            elif key == 'news_sentiment':
+                print(f"- {key.replace('_', ' ').title()}: {len(value) if isinstance(value, list) else 0} 항목")
+            else:
+                print(f"- {key.replace('_', ' ').title()}: {value}")
     else: print("테스트 분석 실패.")
     print("\n--- 테스트 실행 종료 ---")
