@@ -138,6 +138,94 @@ def get_fundamental_data(ticker):
         logging.info(f"{ticker} 기본 정보 가져오기 성공."); return fundamentals
     except Exception as e: logging.error(f"{ticker} 기본 정보(.info) 실패: {e}"); return fundamentals
 
+# stock_analysis.py 파일에 아래 함수 추가
+
+import numpy as np # 숫자 계산 및 NaN 처리 위해 추가
+import re # 컬럼명 탐색 위해 추가
+
+# (find_financial_statement_item 헬퍼 함수는 이미 있다고 가정, 없다면 이전 답변 참고하여 추가)
+def find_financial_statement_item(index, keywords, contains_mode=True, case_sensitive=False):
+    """재무제표 인덱스에서 키워드를 포함하거나 일치하는 항목 이름을 찾습니다."""
+    if not isinstance(index, pd.Index): return None
+    pattern = r'\s*'.join(keywords); flags = 0 if case_sensitive else re.IGNORECASE
+    for item in index:
+        if contains_mode:
+             try:
+                  if re.search(pattern, item, flags=flags): return item
+             except TypeError: continue
+        else:
+            cleaned_item = re.sub(r'\W+', '', str(item)).lower(); cleaned_pattern = re.sub(r'\W+', '', ''.join(keywords)).lower()
+            if cleaned_item == cleaned_pattern: return item
+    first_keyword_pattern = keywords[0]
+    for item in index:
+         try:
+              if re.search(first_keyword_pattern, item, flags=flags): logging.warning(f"정확 항목명 매칭 실패. '{keywords}' 대신 '{item}' 시도."); return item
+         except TypeError: continue
+    return None
+
+def get_roe_trend(ticker, num_periods=4):
+    """최근 분기별 ROE(%) 추세를 계산하여 반환합니다 (딕셔너리 리스트)."""
+    logging.info(f"{ticker}: 분기별 ROE 추세 가져오기 시도 (최근 {num_periods} 분기)...")
+    try:
+        stock = yf.Ticker(ticker)
+        # 분기별 손익계산서 및 대차대조표 가져오기
+        qf = stock.quarterly_financials
+        qbs = stock.quarterly_balance_sheet
+
+        if qf.empty or qbs.empty:
+            logging.warning(f"{ticker}: 분기별 재무 또는 대차대조표 데이터 없음.")
+            return None
+
+        # 필요한 항목 이름 찾기 (유연하게)
+        # 순이익: Net Income, Net Income From Continuing Operations 등
+        net_income_col = find_financial_statement_item(qf.index, ['Net', 'Income'])
+        # 자본총계: Stockholders Equity, Total Equity Gross Minority Interest 등
+        equity_col = find_financial_statement_item(qbs.index, ['Stockholder', 'Equity']) or \
+                     find_financial_statement_item(qbs.index, ['Total', 'Equity', 'Gross'])
+
+        if not net_income_col or not equity_col:
+             logging.warning(f"{ticker}: 순이익('{net_income_col}') 또는 자본총계('{equity_col}') 항목 찾기 실패.")
+             # logging.debug(f"손익계산서 항목: {qf.index.tolist()}")
+             # logging.debug(f"대차대조표 항목: {qbs.index.tolist()}")
+             return None
+
+        # 최신 N개 분기 데이터 선택 및 정렬
+        qf_recent = qf.loc[[net_income_col]].iloc[:, :num_periods].T
+        qbs_recent = qbs.loc[[equity_col]].iloc[:, :num_periods].T
+
+        # 두 데이터프레임의 인덱스(날짜)를 기준으로 합치기 (Outer join으로 최대한 살림)
+        df_trend = pd.merge(qf_recent, qbs_recent, left_index=True, right_index=True, how='outer')
+        df_trend.index = pd.to_datetime(df_trend.index)
+        df_trend = df_trend.sort_index(ascending=True)
+
+        # 숫자형 변환 및 오류 처리
+        df_trend[net_income_col] = pd.to_numeric(df_trend[net_income_col], errors='coerce')
+        df_trend[equity_col] = pd.to_numeric(df_trend[equity_col], errors='coerce')
+
+        # ROE 계산: 순이익 / 자본총계 * 100
+        # 자본총계가 0 이하인 경우 계산 불가 (NaN 처리)
+        df_trend[equity_col] = df_trend[equity_col].apply(lambda x: x if x > 0 else np.nan)
+        df_trend.dropna(subset=[net_income_col, equity_col], inplace=True) # 계산 불가능 행 제거
+
+        if df_trend.empty:
+             logging.warning(f"{ticker}: ROE 계산 가능한 데이터 부족.")
+             return None
+
+        df_trend['ROE (%)'] = (df_trend[net_income_col] / df_trend[equity_col]) * 100
+        df_trend['ROE (%)'] = df_trend['ROE (%)'].round(2)
+
+        # 결과 포맷팅
+        result_trend = df_trend[['ROE (%)']].reset_index()
+        result_trend.rename(columns={'index': 'Date'}, inplace=True)
+        result_trend['Date'] = result_trend['Date'].dt.strftime('%Y-%m-%d')
+
+        logging.info(f"{ticker}: 최근 {len(result_trend)}개 분기 ROE(%) 추세 계산 완료.")
+        return result_trend.to_dict('records')
+
+    except Exception as e:
+        logging.error(f"{ticker}: ROE 추세 계산 중 오류: {e}")
+        # logging.error(traceback.format_exc()) # 상세 디버깅 시
+        return None
 # --- 🍀 영업이익률 추세 계산 함수 (개선 버전) ---
 
 def find_financial_statement_item(index, keywords, contains_mode=True, case_sensitive=False):
@@ -359,6 +447,9 @@ def analyze_stock(ticker, news_key, fred_key, analysis_period_years=2, forecast_
     # --- 영업이익률 추세 호출 시 num_periods 전달 ---
     output_results['operating_margin_trend'] = get_operating_margin_trend(ticker, num_periods=num_trend_periods)
     # -----------------------------------------
+    # --- 🍀 ROE 추세 데이터 추가 ---
+    output_results['roe_trend'] = get_roe_trend(ticker, num_periods=num_trend_periods)
+    # -----------------------------
 
     output_results['news_sentiment'] = get_news_sentiment(ticker, news_key)
     fg_value, fg_class = get_fear_greed_index()
@@ -377,6 +468,10 @@ def analyze_stock(ticker, news_key, fred_key, analysis_period_years=2, forecast_
 
     logging.info(f"--- {ticker} 주식 분석 완료 ---")
     return output_results
+elif key == 'roe_trend' and isinstance(value, list): print(f"- {key.replace('_', ' ').title()}: {len(value)} 분기 데이터"); [print(f"    - {item}") for item in value]
+
+
+
 
 # --- 메인 실행 부분 (직접 실행 시 테스트용) ---
 if __name__ == "__main__":
