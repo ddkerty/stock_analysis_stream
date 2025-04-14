@@ -1,4 +1,4 @@
-# app.py (뉴스 목록 표시 SyntaxError 수정)
+# app.py (예측 테이블 .style.format 오류 수정)
 
 import streamlit as st
 import pandas as pd
@@ -34,43 +34,29 @@ st.title("📊 주식 분석 및 예측 도구")
 st.markdown("과거 데이터 분석, 미래 예측과 함께 기업 기본 정보 및 보유 종목 리스크를 추적합니다.")
 
 # --- API 키 로드 (Secrets 우선, .env 차선) ---
-NEWS_API_KEY = None
-FRED_API_KEY = None
-api_keys_loaded = False
+# ... (이전과 동일한 API 키 로드 로직) ...
+NEWS_API_KEY = None; FRED_API_KEY = None; api_keys_loaded = False
 secrets_available = hasattr(st, 'secrets')
-
 if secrets_available:
-    try:
-        NEWS_API_KEY = st.secrets["NEWS_API_KEY"]
-        FRED_API_KEY = st.secrets["FRED_API_KEY"]
-        api_keys_loaded = True
-    except KeyError:
-         st.sidebar.error("Secrets에 API 키가 없습니다. Cloud 설정을 확인하세요.")
-    except Exception as e:
-        st.sidebar.error(f"Secrets 로드 중 오류: {e}")
+    try: NEWS_API_KEY = st.secrets["NEWS_API_KEY"]; FRED_API_KEY = st.secrets["FRED_API_KEY"]; api_keys_loaded = True
+    except KeyError: st.sidebar.error("Secrets에 API 키 없음. Cloud 설정 확인.")
+    except Exception as e: st.sidebar.error(f"Secrets 로드 오류: {e}")
 else:
-    st.sidebar.info("Secrets 기능 사용 불가. 로컬 .env 파일을 확인합니다.")
+    st.sidebar.info("Secrets 기능 사용 불가. 로컬 .env 확인.")
     try:
-        dotenv_path = os.path.join(BASE_DIR, '.env')
+        dotenv_path = os.path.join(BASE_DIR, '.env');
         if os.path.exists(dotenv_path):
-            load_dotenv(dotenv_path=dotenv_path)
-            NEWS_API_KEY = os.getenv("NEWS_API_KEY")
-            FRED_API_KEY = os.getenv("FRED_API_KEY")
-            if NEWS_API_KEY and FRED_API_KEY:
-                api_keys_loaded = True
-            else:
-                st.sidebar.error("로컬 .env 파일에서 API 키를 찾을 수 없습니다.")
-        else:
-            st.sidebar.error(f"로컬 .env 파일을 찾을 수 없습니다: {dotenv_path}")
-    except Exception as e:
-        st.sidebar.error(f".env 파일 로드 중 오류: {e}")
-
-if not api_keys_loaded:
-    st.sidebar.error("API 키 로드 실패! 일부 기능 제한됨.")
+            load_dotenv(dotenv_path=dotenv_path); NEWS_API_KEY = os.getenv("NEWS_API_KEY"); FRED_API_KEY = os.getenv("FRED_API_KEY")
+            if NEWS_API_KEY and FRED_API_KEY: api_keys_loaded = True
+            else: st.sidebar.error(".env 파일에서 API 키 찾을 수 없음.")
+        else: st.sidebar.error(f".env 파일 없음: {dotenv_path}")
+    except Exception as e: st.sidebar.error(f".env 로드 오류: {e}")
+if not api_keys_loaded: st.sidebar.error("API 키 로드 실패! 기능 제한됨.")
 
 
 # --- 사이드바 설정 ---
 with st.sidebar:
+    # ... (이전과 동일한 사이드바 설정: 티커, 기간, 분기 수, 평단가, 수량, 버튼) ...
     st.header("⚙️ 분석 설정")
     ticker_input = st.text_input("종목 티커 입력 (예: AAPL, 005930.KS)", value="AAPL")
     analysis_years = st.select_slider("분석 기간 선택", options=[1, 2, 3, 5, 7, 10], value=2)
@@ -87,52 +73,44 @@ with st.sidebar:
     st.divider()
     analyze_button = st.button("🚀 분석 시작!")
 
+
 # --- 메인 화면 ---
 results_placeholder = st.container()
 
 # 캐시된 분석 함수 정의
 @st.cache_data(ttl=timedelta(hours=1))
 def run_cached_analysis(ticker, news_key, fred_key, years, days, num_trend_periods):
+    # ... (이전과 동일) ...
     """캐싱을 위한 분석 함수 래퍼"""
-    if not news_key or not fred_key:
-         st.error("API 키가 유효하지 않아 분석을 진행할 수 없습니다.")
-         return None
-    try:
-        return sa.analyze_stock(ticker, news_key, fred_key,
-                                analysis_period_years=years,
-                                forecast_days=days,
-                                num_trend_periods=num_trend_periods)
-    except Exception as e:
-        st.error(f"분석 함수(stock_analysis.py) 실행 중 오류 발생: {e}")
-        return None
+    if not news_key or not fred_key: st.error("API 키 미유효."); return None
+    try: return sa.analyze_stock(ticker, news_key, fred_key, analysis_period_years=years, forecast_days=days, num_trend_periods=num_trend_periods)
+    except Exception as e: st.error(f"분석 함수 실행 오류: {e}"); return None
 
 if analyze_button:
-    if not ticker_input:
-        results_placeholder.warning("종목 티커를 입력해주세요.")
-    elif not api_keys_loaded:
-        results_placeholder.error("API 키가 로드되지 않아 분석을 실행할 수 없습니다.")
+    if not ticker_input: results_placeholder.warning("종목 티커를 입력해주세요.")
+    elif not api_keys_loaded: results_placeholder.error("API 키가 로드되지 않아 분석 불가.")
     else:
         ticker_processed = ticker_input.strip().upper()
-        with st.spinner(f"{ticker_processed} 종목 분석 중... 잠시만 기다려주세요..."):
+        with st.spinner(f"{ticker_processed} 종목 분석 중..."):
             try:
-                results = run_cached_analysis(ticker_processed, NEWS_API_KEY, FRED_API_KEY,
-                                              analysis_years, forecast_days, num_trend_periods_input)
+                results = run_cached_analysis(ticker_processed, NEWS_API_KEY, FRED_API_KEY, analysis_years, forecast_days, num_trend_periods_input)
                 results_placeholder.empty()
 
                 if results and isinstance(results, dict):
                     st.header(f"📈 {ticker_processed} 분석 결과")
 
                     # 1. 기본 정보
+                    # ... (이전과 동일) ...
                     st.subheader("요약 정보")
-                    # ... (동일) ...
                     col1, col2, col3 = st.columns(3)
                     col1.metric("현재가 (최근 종가)", f"${results.get('current_price', 'N/A')}")
                     col2.metric("분석 시작일", results.get('analysis_period_start', 'N/A'))
                     col3.metric("분석 종료일", results.get('analysis_period_end', 'N/A'))
 
+
                     # 2. 기본적 분석(Fundamental) 데이터 표시
+                    # ... (이전과 동일) ...
                     st.subheader("📊 기업 기본 정보 (Fundamentals)")
-                    # ... (동일) ...
                     fundamentals = results.get('fundamentals')
                     if fundamentals and isinstance(fundamentals, dict):
                         colf1, colf2, colf3 = st.columns(3)
@@ -146,9 +124,10 @@ if analyze_button:
                     else: st.warning("기업 기본 정보를 가져오지 못했습니다.")
                     st.caption("데이터 출처: Yahoo Finance")
 
+
                     # 3. 영업이익률 추세
+                    # ... (이전과 동일) ...
                     st.subheader(f"📈 영업이익률 추세 (최근 {num_trend_periods_input} 분기)")
-                    # ... (동일) ...
                     margin_trend_data = results.get('operating_margin_trend')
                     if margin_trend_data and isinstance(margin_trend_data, list):
                         try:
@@ -156,56 +135,65 @@ if analyze_button:
                             st.line_chart(df_margin[['Operating Margin (%)']])
                             with st.expander("데이터 테이블 보기"): st.dataframe(df_margin.style.format({"Operating Margin (%)": "{:.2f}%"}), use_container_width=True)
                         except Exception as margin_err: st.error(f"영업이익률 추세 처리/표시 오류: {margin_err}")
-                    elif margin_trend_data is None: st.info("영업이익률 추세 데이터를 가져올 수 없거나 해당 기간 데이터가 없습니다.")
-                    else: st.info("표시할 영업이익률 추세 데이터가 없습니다.")
+                    elif margin_trend_data is None: st.info("영업이익률 추세 데이터 없음.")
+                    else: st.info("표시할 영업이익률 추세 데이터 없음.")
                     st.divider()
 
                     # 4. 기술적 분석 (차트)
-                    st.subheader("기술적 분석 차트")
-                    # ... (동일) ...
-                    stock_chart_fig = results.get('stock_chart_fig')
+                    # ... (이전과 동일) ...
+                    st.subheader("기술적 분석 차트"); stock_chart_fig = results.get('stock_chart_fig')
                     if stock_chart_fig: st.plotly_chart(stock_chart_fig, use_container_width=True)
                     else: st.warning("주가 차트 생성 실패.")
                     st.divider()
 
                     # 5. 시장 심리
-                    st.subheader("시장 심리 분석")
-                    col_news, col_fng = st.columns([2, 1])
+                    # ... (이전과 동일, 수정된 뉴스 목록 표시 포함) ...
+                    st.subheader("시장 심리 분석"); col_news, col_fng = st.columns([2, 1])
                     with col_news:
-                        st.markdown("**📰 뉴스 감정 분석**")
-                        news_sentiment = results.get('news_sentiment', ["정보 없음"])
+                        st.markdown("**📰 뉴스 감정 분석**"); news_sentiment = results.get('news_sentiment', ["정보 없음"])
                         if isinstance(news_sentiment, list) and len(news_sentiment) > 0:
                             st.info(news_sentiment[0])
-                            # --- ⭐️ 수정된 부분 시작 ---
-                            with st.expander("최근 뉴스 목록 보기", expanded=False):
-                                for line in news_sentiment[1:]: # 리스트 컴프리헨션 대신 for 반복문 사용
+                            with st.expander("최근 뉴스 목록 보기"):
+                                for line in news_sentiment[1:]: # 수정된 for 반복문
                                     st.write(f"- {line}")
-                            # --- ⭐️ 수정된 부분 끝 ---
-                        else:
-                            st.write(news_sentiment) # 오류 메시지 등 표시
+                        else: st.write(news_sentiment)
                     with col_fng:
-                        st.markdown("**😨 공포-탐욕 지수**")
-                        # ... (동일) ...
-                        fng_index = results.get('fear_greed_index', "N/A")
+                        st.markdown("**😨 공포-탐욕 지수**"); fng_index = results.get('fear_greed_index', "N/A")
                         if isinstance(fng_index, dict): st.metric(label="현재 지수", value=fng_index.get('value', 'N/A'), delta=fng_index.get('classification', ''))
                         else: st.write(fng_index)
                     st.divider()
 
                     # 6. Prophet 예측 분석
                     st.subheader("Prophet 주가 예측")
-                    # ... (동일) ...
                     forecast_fig = results.get('forecast_fig'); forecast_data_list = results.get('prophet_forecast')
                     if forecast_fig: st.plotly_chart(forecast_fig, use_container_width=True)
                     elif isinstance(forecast_data_list, str): st.info(forecast_data_list)
                     else: st.warning("예측 차트 생성 실패.")
-                    if isinstance(forecast_data_list, list): st.markdown("**📊 예측 데이터 (최근 10일)**"); df_fcst = pd.DataFrame(forecast_data_list); df_fcst['ds'] = pd.to_datetime(df_fcst['ds']).dt.strftime('%Y-%m-%d'); st.dataframe(df_fcst[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(10).style.format("{:.2f}"), use_container_width=True)
+
+                    # --- ⭐️ 예측 테이블 표시 수정 시작 ---
+                    if isinstance(forecast_data_list, list):
+                        st.markdown("**📊 예측 데이터 (최근 10일)**")
+                        df_forecast_display = pd.DataFrame(forecast_data_list)
+                        df_forecast_display['ds'] = pd.to_datetime(df_forecast_display['ds']).dt.strftime('%Y-%m-%d')
+                        # .style.format()에 딕셔너리를 사용하여 숫자 컬럼만 지정
+                        st.dataframe(
+                            df_forecast_display[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(10).style.format({
+                                'yhat': "{:.2f}",
+                                'yhat_lower': "{:.2f}",
+                                'yhat_upper': "{:.2f}"
+                                # 'ds' 컬럼은 여기서 지정하지 않음 (문자열이므로)
+                            }),
+                            use_container_width=True
+                        )
+                    # --- ⭐️ 예측 테이블 표시 수정 끝 ---
+
                     cv_plot_path = results.get('cv_plot_path')
                     if cv_plot_path and os.path.exists(cv_plot_path): st.markdown("**📉 교차 검증 결과 (MAPE)**"); st.image(cv_plot_path, caption="MAPE (낮을수록 좋음)")
                     st.divider()
 
                     # 7. 리스크 트래커
                     st.subheader("🚨 리스크 트래커 (예측 기반)")
-                    # ... (동일) ...
+                    # ... (이전과 동일) ...
                     if avg_price > 0 and isinstance(forecast_data_list, list):
                         df_pred = pd.DataFrame(forecast_data_list)
                         try:
@@ -233,9 +221,8 @@ if analyze_button:
                     st.divider()
 
                     # 8. 자동 분석 결과 요약
-                    st.subheader("🧐 자동 분석 결과 요약 (참고용)")
                     # ... (이전과 동일) ...
-                    summary = []
+                    st.subheader("🧐 자동 분석 결과 요약 (참고용)"); summary = []
                     if isinstance(forecast_data_list, list) and len(forecast_data_list) > 0:
                         try: start_pred = forecast_data_list[0]['yhat']; end_pred = forecast_data_list[-1]['yhat']; trend_obs = "상승" if end_pred > start_pred else "하락" if end_pred < start_pred else "횡보"; summary.append(f"- Prophet 예측: 향후 {forecast_days}일간 **{trend_obs}** 추세 예상 (${forecast_data_list[-1]['yhat_lower']:.2f} ~ ${forecast_data_list[-1]['yhat_upper']:.2f}).")
                         except: summary.append("- 예측 요약 오류.")
