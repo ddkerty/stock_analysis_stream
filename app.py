@@ -202,13 +202,21 @@ if analyze_button:
                     # 5. 시장 심리
                     # ... (동일) ...
                     st.subheader("시장 심리 분석"); col_news, col_fng = st.columns([2, 1])
-                    with col_news: st.markdown("**📰 뉴스 감정 분석**"); news_sentiment = results.get('news_sentiment', ["정보 없음"])
-                        # 올바른 코드 (이 코드로 교체)
-                        if isinstance(news_sentiment, list) and len(news_sentiment) > 0:
-                            st.info(news_sentiment[0])
-                            with st.expander("최근 뉴스 목록 보기", expanded=False):
-                                for line in news_sentiment[1:]:
-                                    st.write(f"- {line}")
+                    with col_news: # 레벨 1
+                        st.markdown("**📰 뉴스 감정 분석**") # 레벨 2
+                        news_sentiment = results.get('news_sentiment', ["정보 없음"]) # 레벨 2
+                        if isinstance(news_sentiment, list) and len(news_sentiment) > 0: # 레벨 2
+                            st.info(news_sentiment[0]) # 레벨 3 (평균 점수 또는 에러 메시지 상단 표시)
+                            # 뉴스 목록이 2개 이상일 때만 expander 내용 표시 (에러 메시지만 있는 경우 제외)
+                            if len(news_sentiment) > 1:
+                                with st.expander("최근 뉴스 목록 보기", expanded=False): # 레벨 3
+                                    for line in news_sentiment[1:]: # 레벨 4
+                                        st.write(f"- {line}") # 레벨 5
+                        # news_sentiment가 리스트가 아니거나 비어있는 경우 처리
+                        elif news_sentiment: # None 이 아닌 경우 (문자열 등)
+                            st.write(news_sentiment) # 레벨 3 (예: "관련 뉴스 없음", "API 키 미설정")
+                        else: # None인 경우 (거의 없겠지만)
+                             st.write("뉴스 정보를 가져올 수 없습니다.") # 레벨 3
 
                     # 6. Prophet 예측 분석
                     # ... (동일) ...
