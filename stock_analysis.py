@@ -461,7 +461,7 @@ def analyze_stock(ticker, news_key, fred_key, analysis_period_years=2, forecast_
     return output_results
 
 
-# --- 메인 실행 부분 (테스트용) ---
+# --- 메인 실행 부분 (테스트용 - SyntaxError 수정) ---
 if __name__ == "__main__":
     print(f"stock_analysis.py 직접 실행 (테스트 목적, Base directory: {BASE_DIR}).")
     target_ticker = "MSFT" # 다른 티커로 테스트
@@ -471,11 +471,25 @@ if __name__ == "__main__":
     print("\n--- 테스트 실행 결과 요약 ---")
     if test_results:
         for key, value in test_results.items():
-            if 'fig' in key and value is not None: print(f"- {key.replace('_',' ').title()}: Plotly Figure 생성됨")
-            elif key == 'fundamentals' and isinstance(value, dict): print(f"- Fundamentals:"); [print(f"    - {k}: {v}") for k, v in value.items()]
-            elif '_trend' in key and isinstance(value, list): print(f"- {key.replace('_',' ').title()}: {len(value)} 분기"); [print(f"    - {item}") for item in value] # 통합 처리
-            elif key == 'prophet_forecast': print(f"- Prophet Forecast: {type(value)}")
-            elif key == 'news_sentiment': print(f"- News Sentiment: {len(value) if isinstance(value, list) else 0} 항목")
-            else: print(f"- {key.replace('_',' ').title()}: {value}")
+            if 'fig' in key and value is not None:
+                print(f"- {key.replace('_',' ').title()}: Plotly Figure 객체 생성됨")
+            elif key == 'fundamentals' and isinstance(value, dict):
+                print(f"- Fundamentals:")
+                # --- ⭐️ 수정된 부분: for 반복문 사용 ---
+                for f_key, f_value in value.items():
+                     print(f"    - {f_key}: {f_value}")
+                # -----------------------------------
+            elif '_trend' in key and isinstance(value, list):
+                print(f"- {key.replace('_',' ').title()}: {len(value)} 분기")
+                # --- ⭐️ 수정된 부분: for 반복문 사용 ---
+                for item in value:
+                     print(f"    - {item}")
+                # -----------------------------------
+            elif key == 'prophet_forecast':
+                print(f"- Prophet Forecast: {type(value)}")
+            elif key == 'news_sentiment':
+                print(f"- News Sentiment: {len(value) if isinstance(value, list) else 0} 항목")
+            else:
+                print(f"- {key.replace('_',' ').title()}: {value}")
     else: print("테스트 분석 실패.")
     print("\n--- 테스트 실행 종료 ---")
