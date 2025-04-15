@@ -1,4 +1,4 @@
-# app.py (최종 버전)
+# app.py (ROE 추세 표시 기능 최종 추가)
 
 import streamlit as st
 import pandas as pd
@@ -12,10 +12,8 @@ import numpy as np # 리스크 계산 시 np.where 사용 위해 추가
 
 # --- 기본 경로 설정 ---
 try:
-    # 스크립트 실행 시 __file__ 변수 사용
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 except NameError:
-    # 대화형 환경 등 __file__ 없을 시 현재 작업 디렉토리 사용
     BASE_DIR = os.getcwd()
 
 # --- 분석 로직 가져오기 ---
@@ -23,12 +21,12 @@ try:
     import stock_analysis as sa
 except ModuleNotFoundError:
     st.error(f"오류: stock_analysis.py 파일을 찾을 수 없습니다. app.py와 같은 폴더({BASE_DIR})에 저장해주세요.")
-    st.stop() # 앱 실행 중지 (파일 없으면 진행 불가)
+    st.stop()
 except ImportError as ie:
      st.error(f"stock_analysis.py를 import하는 중 오류 발생: {ie}")
      st.info("필요한 라이브러리가 모두 설치되었는지 확인하세요. (예: pip install -r requirements.txt)")
-     st.stop() # 라이브러리 문제 시 진행 불가
-except Exception as import_err: # 그 외 import 관련 예외 처리
+     st.stop()
+except Exception as import_err:
      st.error(f"stock_analysis.py import 중 예외 발생: {import_err}")
      st.info("stock_analysis.py 파일 내부에 오류가 없는지 확인해보세요.")
      st.stop()
@@ -36,49 +34,28 @@ except Exception as import_err: # 그 외 import 관련 예외 처리
 # --- Streamlit 페이지 설정 ---
 st.set_page_config(page_title="주식 분석 및 리스크 트래커", layout="wide", initial_sidebar_state="expanded")
 
-st.title("📊 주식 분석 및 예측 도구 v1.1") # 버전 표시 추가 (선택 사항)
-st.markdown("과거 데이터 분석, 미래 예측과 함께 기업 기본 정보 및 보유 종목 리스크를 추적합니다.")
+st.title("📊 주식 분석 및 예측 도구 v1.2") # 버전 업데이트
+st.markdown("과거 데이터 분석, 미래 예측과 함께 기업 기본 정보, 수익성 추세 및 보유 종목 리스크를 추적합니다.")
 
 # --- API 키 로드 (Secrets 우선, .env 차선) ---
-NEWS_API_KEY = None
-FRED_API_KEY = None
-api_keys_loaded = False
-secrets_available = hasattr(st, 'secrets') # Streamlit Cloud 환경 확인
-
-# 사이드바 상단에 로드 상태 표시용 컨테이너
+NEWS_API_KEY = None; FRED_API_KEY = None; api_keys_loaded = False
+secrets_available = hasattr(st, 'secrets')
 sidebar_status = st.sidebar.empty()
-
 if secrets_available:
-    try:
-        NEWS_API_KEY = st.secrets["NEWS_API_KEY"]
-        FRED_API_KEY = st.secrets["FRED_API_KEY"]
-        # sidebar_status.success("API 키 로드 완료 (Secrets)") # 성공 시 메시지 숨기기 가능
-        api_keys_loaded = True
-    except KeyError:
-         sidebar_status.error("Secrets에 API 키 없음. Cloud 설정 확인.")
-    except Exception as e:
-        sidebar_status.error(f"Secrets 로드 오류: {e}")
+    try: NEWS_API_KEY = st.secrets["NEWS_API_KEY"]; FRED_API_KEY = st.secrets["FRED_API_KEY"]; api_keys_loaded = True
+    except KeyError: sidebar_status.error("Secrets에 API 키 없음. Cloud 설정 확인.")
+    except Exception as e: sidebar_status.error(f"Secrets 로드 오류: {e}")
 else:
     sidebar_status.info("로컬 환경 감지. .env 파일 확인...")
     try:
-        dotenv_path = os.path.join(BASE_DIR, '.env')
+        dotenv_path = os.path.join(BASE_DIR, '.env');
         if os.path.exists(dotenv_path):
-            load_dotenv(dotenv_path=dotenv_path)
-            NEWS_API_KEY = os.getenv("NEWS_API_KEY")
-            FRED_API_KEY = os.getenv("FRED_API_KEY")
-            if NEWS_API_KEY and FRED_API_KEY:
-                # sidebar_status.success("API 키 로드 완료 (.env)") # 성공 시 메시지 숨기기 가능
-                api_keys_loaded = True
-            else:
-                sidebar_status.error(".env 파일에서 API 키 찾을 수 없음.")
-        else:
-            sidebar_status.error(f".env 파일 없음: {dotenv_path}")
-    except Exception as e:
-        sidebar_status.error(f".env 파일 로드 오류: {e}")
-
-if not api_keys_loaded:
-    st.sidebar.error("API 키 로드 실패! 일부 기능 제한됨.") # 최종 실패 시 에러 표시
-
+            load_dotenv(dotenv_path=dotenv_path); NEWS_API_KEY = os.getenv("NEWS_API_KEY"); FRED_API_KEY = os.getenv("FRED_API_KEY")
+            if NEWS_API_KEY and FRED_API_KEY: api_keys_loaded = True
+            else: sidebar_status.error(".env 파일에서 API 키 찾을 수 없음.")
+        else: sidebar_status.error(f".env 파일 없음: {dotenv_path}")
+    except Exception as e: sidebar_status.error(f".env 파일 로드 오류: {e}")
+if not api_keys_loaded: st.sidebar.error("API 키 로드 실패! 기능 제한됨.")
 
 # --- 사이드바 설정 ---
 with st.sidebar:
@@ -99,45 +76,27 @@ with st.sidebar:
     analyze_button = st.button("🚀 분석 시작!")
 
 # --- 메인 화면 ---
-results_placeholder = st.container() # 결과 표시 영역 선언
+results_placeholder = st.container()
 
 # 캐시된 분석 함수 정의
-@st.cache_data(ttl=timedelta(hours=1)) # 1시간 캐시
+@st.cache_data(ttl=timedelta(hours=1))
 def run_cached_analysis(ticker, news_key, fred_key, years, days, num_trend_periods):
     """캐싱을 위한 분석 함수 래퍼"""
-    # API 키 유효성 검사는 함수 호출 전에 하는 것이 더 나을 수 있음
-    if not news_key or not fred_key:
-         # 캐싱된 함수 내에서 st 요소를 직접 사용하는 것은 권장되지 않음
-         # print("에러: API 키 미유효 (캐시 함수)") # 로그 기록 방식으로 변경 권장
-         logging.error("API 키가 유효하지 않아 분석을 진행할 수 없습니다 (캐시 함수).")
-         return {"error": "API 키 미유효"} # 오류 상태 반환
+    if not news_key or not fred_key: return {"error": "API 키 미유효"}
     try:
-        return sa.analyze_stock(ticker, news_key, fred_key,
-                                analysis_period_years=years,
-                                forecast_days=days,
-                                num_trend_periods=num_trend_periods)
-    except Exception as e:
-        logging.error(f"분석 함수(stock_analysis.py) 실행 중 오류 발생: {e}")
-        logging.error(traceback.format_exc())
-        return {"error": f"분석 중 오류 발생: {e}"} # 오류 상태 반환
+        return sa.analyze_stock(ticker, news_key, fred_key, analysis_period_years=years, forecast_days=days, num_trend_periods=num_trend_periods)
+    except Exception as e: logging.error(f"분석 함수 실행 오류: {e}"); logging.error(traceback.format_exc()); return {"error": f"분석 중 오류 발생: {e}"}
 
-# 분석 시작 버튼 로직
 if analyze_button:
-    if not ticker_input:
-        results_placeholder.warning("종목 티커를 입력해주세요.")
-    elif not api_keys_loaded:
-        results_placeholder.error("API 키가 로드되지 않아 분석을 실행할 수 없습니다. Secrets 또는 .env 파일을 확인하세요.")
+    if not ticker_input: results_placeholder.warning("종목 티커를 입력해주세요.")
+    elif not api_keys_loaded: results_placeholder.error("API 키가 로드되지 않아 분석 불가.")
     else:
-        ticker_processed = ticker_input.strip().upper() # 입력값 정리
-        with st.spinner(f"{ticker_processed} 종목 분석 중... 잠시만 기다려주세요..."):
+        ticker_processed = ticker_input.strip().upper()
+        with st.spinner(f"{ticker_processed} 종목 분석 중..."):
             try:
-                # 캐시된 함수 호출 (API 키 전달)
-                results = run_cached_analysis(ticker_processed, NEWS_API_KEY, FRED_API_KEY,
-                                              analysis_years, forecast_days, num_trend_periods_input)
+                results = run_cached_analysis(ticker_processed, NEWS_API_KEY, FRED_API_KEY, analysis_years, forecast_days, num_trend_periods_input)
+                results_placeholder.empty()
 
-                results_placeholder.empty() # 이전 결과 표시 영역 비우기
-
-                # 결과가 정상이면 표시, 오류가 포함된 딕셔너리이면 에러 표시
                 if results and isinstance(results, dict) and "error" not in results:
                     st.header(f"📈 {ticker_processed} 분석 결과")
 
@@ -150,8 +109,8 @@ if analyze_button:
 
                     # 2. 기본적 분석(Fundamental) 데이터 표시
                     st.subheader("📊 기업 기본 정보 (Fundamentals)")
-                    fundamentals = results.get('fundamentals')
-                    if fundamentals and isinstance(fundamentals, dict) and fundamentals.get("시가총액", "N/A") != "N/A": # 데이터 유효성 체크 강화
+                    fundamentals = results.get('fundamentals');
+                    if fundamentals and isinstance(fundamentals, dict) and fundamentals.get("시가총액", "N/A") != "N/A":
                         colf1, colf2, colf3 = st.columns(3)
                         with colf1: st.metric("시가총액", fundamentals.get("시가총액", "N/A")); st.metric("PER", fundamentals.get("PER", "N/A"))
                         with colf2: st.metric("EPS (주당순이익)", fundamentals.get("EPS", "N/A")); st.metric("Beta (베타)", fundamentals.get("베타", "N/A"))
@@ -161,8 +120,7 @@ if analyze_button:
                         if summary != "N/A":
                             with st.expander("회사 요약 보기"): st.write(summary)
                         st.caption("데이터 출처: Yahoo Finance")
-                    else:
-                        st.warning("기업 기본 정보(펀더멘탈)를 가져오지 못했습니다. (티커 유효성 또는 데이터 제공 여부 확인 필요)")
+                    else: st.warning("기업 기본 정보(펀더멘탈)를 가져오지 못했습니다.")
 
                     # 3. 수익성 추세 (영업이익률 & ROE)
                     st.subheader(f"📈 수익성 추세 (최근 {num_trend_periods_input} 분기)")
@@ -176,61 +134,68 @@ if analyze_button:
                             with st.expander("영업이익률 데이터 보기"): st.dataframe(df_margin.style.format({"Operating Margin (%)": "{:.2f}%"}), use_container_width=True)
                         except Exception as margin_err: st.error(f"영업이익률 추세 처리/표시 오류: {margin_err}")
                     else: st.info("영업이익률 추세 데이터 없음.")
-                    # ROE
+
+                    # --- ✨ ROE 추세 표시 (신규 추가) ---
                     st.markdown("##### ROE (자기자본이익률 %)")
-                    roe_trend_data = results.get('roe_trend')
+                    roe_trend_data = results.get('roe_trend') # 백엔드에서 추가된 키
+
                     if roe_trend_data and isinstance(roe_trend_data, list):
                         try:
-                            df_roe = pd.DataFrame(roe_trend_data); df_roe['Date'] = pd.to_datetime(df_roe['Date']); df_roe.set_index('Date', inplace=True)
+                            df_roe = pd.DataFrame(roe_trend_data)
+                            df_roe['Date'] = pd.to_datetime(df_roe['Date'])
+                            df_roe.set_index('Date', inplace=True)
+
+                            # ROE(%) 컬럼 선택하여 라인 차트 그리기
                             st.line_chart(df_roe[['ROE (%)']])
-                            with st.expander("ROE 데이터 보기"): st.dataframe(df_roe.style.format({"ROE (%)": "{:.2f}%"}), use_container_width=True)
-                        except Exception as roe_err: st.error(f"ROE 추세 처리/표시 오류: {roe_err}")
-                    else: st.info("ROE 추세 데이터 없음.")
+
+                            # 상세 데이터 테이블 (Expander 안)
+                            with st.expander("ROE 데이터 보기"):
+                                st.dataframe(df_roe.style.format({"ROE (%)": "{:.2f}%"}), use_container_width=True)
+                        except Exception as roe_err:
+                            st.error(f"ROE 추세 데이터를 처리/표시하는 중 오류 발생: {roe_err}")
+                    elif roe_trend_data is None:
+                         st.info("ROE 추세 데이터를 가져올 수 없거나 해당 기간 데이터가 없습니다.")
+                    else: # 빈 리스트 등
+                         st.info("표시할 ROE 추세 데이터가 없습니다.")
                     st.divider()
+                    # ------------------------------------
 
                     # 4. 기술적 분석 (차트)
-                    st.subheader("기술적 분석 차트")
-                    stock_chart_fig = results.get('stock_chart_fig')
+                    st.subheader("기술적 분석 차트"); stock_chart_fig = results.get('stock_chart_fig')
                     if stock_chart_fig: st.plotly_chart(stock_chart_fig, use_container_width=True)
                     else: st.warning("주가 차트 생성 실패.")
                     st.divider()
 
                     # 5. 시장 심리
-                    st.subheader("시장 심리 분석")
-                    col_news, col_fng = st.columns([2, 1])
+                    st.subheader("시장 심리 분석"); col_news, col_fng = st.columns([2, 1])
                     with col_news:
-                        st.markdown("**📰 뉴스 감정 분석**")
-                        news_sentiment = results.get('news_sentiment', ["정보 없음"])
+                        st.markdown("**📰 뉴스 감정 분석**"); news_sentiment = results.get('news_sentiment', ["정보 없음"])
                         if isinstance(news_sentiment, list) and len(news_sentiment) > 0:
                             st.info(news_sentiment[0])
                             with st.expander("최근 뉴스 목록 보기", expanded=False):
-                                for line in news_sentiment[1:]: # 수정된 for 반복문
+                                for line in news_sentiment[1:]: # 수정된 for 반복문 사용
                                     st.write(f"- {line}")
                         else: st.write(news_sentiment)
                     with col_fng:
-                        st.markdown("**😨 공포-탐욕 지수**")
-                        fng_index = results.get('fear_greed_index', "N/A")
+                        st.markdown("**😨 공포-탐욕 지수**"); fng_index = results.get('fear_greed_index', "N/A")
                         if isinstance(fng_index, dict): st.metric(label="현재 지수", value=fng_index.get('value', 'N/A'), delta=fng_index.get('classification', ''))
                         else: st.write(fng_index)
                     st.divider()
 
                     # 6. Prophet 예측 분석
-                    st.subheader("Prophet 주가 예측")
-                    forecast_fig = results.get('forecast_fig'); forecast_data_list = results.get('prophet_forecast')
+                    st.subheader("Prophet 주가 예측"); forecast_fig = results.get('forecast_fig'); forecast_data_list = results.get('prophet_forecast')
                     if forecast_fig: st.plotly_chart(forecast_fig, use_container_width=True)
-                    elif isinstance(forecast_data_list, str): st.info(forecast_data_list) # "예측 실패" 등 메시지
+                    elif isinstance(forecast_data_list, str): st.info(forecast_data_list)
                     else: st.warning("예측 차트 생성 실패.")
-                    if isinstance(forecast_data_list, list): # 예측 성공 시 테이블 표시
-                        st.markdown("**📊 예측 데이터 (최근 10일)**")
-                        df_fcst = pd.DataFrame(forecast_data_list); df_fcst['ds'] = pd.to_datetime(df_fcst['ds']).dt.strftime('%Y-%m-%d');
-                        st.dataframe(df_fcst[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(10).style.format({'yhat': "{:.2f}", 'yhat_lower': "{:.2f}", 'yhat_upper': "{:.2f}"}), use_container_width=True)
+                    if isinstance(forecast_data_list, list): st.markdown("**📊 예측 데이터 (최근 10일)**"); df_fcst = pd.DataFrame(forecast_data_list); df_fcst['ds'] = pd.to_datetime(df_fcst['ds']).dt.strftime('%Y-%m-%d');
+                    st.dataframe(df_fcst[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(10).style.format({'yhat': "{:.2f}", 'yhat_lower': "{:.2f}", 'yhat_upper': "{:.2f}"}), use_container_width=True)
                     cv_plot_path = results.get('cv_plot_path')
                     if cv_plot_path and os.path.exists(cv_plot_path): st.markdown("**📉 교차 검증 결과 (MAPE)**"); st.image(cv_plot_path, caption="MAPE (낮을수록 좋음)")
                     st.divider()
 
                     # 7. 리스크 트래커
                     st.subheader("🚨 리스크 트래커 (예측 기반)")
-                    # ... (이전과 동일한 리스크 트래커 로직) ...
+                    # ... (이전과 동일) ...
                     if avg_price > 0 and isinstance(forecast_data_list, list):
                         df_pred = pd.DataFrame(forecast_data_list);
                         try:
@@ -258,8 +223,9 @@ if analyze_button:
 
 
                     # 8. 자동 분석 결과 요약
-                    # ... (ROE 요약 추가됨) ...
-                    st.subheader("🧐 자동 분석 결과 요약 (참고용)"); summary = []
+                    st.subheader("🧐 자동 분석 결과 요약 (참고용)")
+                    summary = []
+                    # ... (기존 요약 로직 + ROE 요약 추가) ...
                     if isinstance(forecast_data_list, list) and len(forecast_data_list) > 0:
                         try: start_pred = forecast_data_list[0]['yhat']; end_pred = forecast_data_list[-1]['yhat']; trend_obs = "상승" if end_pred > start_pred else "하락" if end_pred < start_pred else "횡보"; summary.append(f"- Prophet 예측: 향후 {forecast_days}일간 **{trend_obs}** 추세 예상 (${forecast_data_list[-1]['yhat_lower']:.2f} ~ ${forecast_data_list[-1]['yhat_upper']:.2f}).")
                         except: summary.append("- 예측 요약 오류.")
@@ -275,25 +241,30 @@ if analyze_button:
                     roe_trend_data = results.get('roe_trend') # 요약 위해 다시 가져옴
                     if roe_trend_data and isinstance(roe_trend_data, list) and len(roe_trend_data) >= 2:
                         try:
-                            first_roe = pd.to_numeric(roe_trend_data[0]['ROE (%)'], errors='coerce'); last_roe = pd.to_numeric(roe_trend_data[-1]['ROE (%)'], errors='coerce')
-                            if pd.notna(first_roe) and pd.notna(last_roe):
+                            # 데이터 프레임으로 변환하여 숫자 처리 후 비교
+                            df_roe_summary = pd.DataFrame(roe_trend_data)
+                            df_roe_summary['ROE (%)'] = pd.to_numeric(df_roe_summary['ROE (%)'], errors='coerce')
+                            df_roe_summary.dropna(subset=['ROE (%)'], inplace=True)
+                            if len(df_roe_summary) >= 2:
+                                first_roe = df_roe_summary['ROE (%)'].iloc[0]
+                                last_roe = df_roe_summary['ROE (%)'].iloc[-1]
                                 roe_trend_desc = "개선" if last_roe > first_roe else "악화" if last_roe < first_roe else "유지"
                                 summary.append(f"- 수익성(ROE): 최근 {len(roe_trend_data)}분기 **{roe_trend_desc}** 추세 (최근 {last_roe:.2f}%).")
                         except Exception as e: logging.warning(f"ROE 요약 생성 중 오류: {e}")
 
-                    if avg_price > 0 and isinstance(forecast_data_list, list) and 'risk_days' in locals(): # risk_days 변수 존재 확인 추가
+                    if avg_price > 0 and isinstance(forecast_data_list, list) and 'risk_days' in locals(): # risk_days 정의 여부 확인
                         if risk_days > 0: summary.append(f"- 리스크: 예측 하한선 기준, **{risk_days}일** 평단가 하회 가능성 (최대 손실률 {max_loss_pct:.2f}%).")
                         else: summary.append(f"- 리스크: 예측 하한선 기준, 평단가 하회 리스크 없음.")
                     if summary: st.markdown("\n".join(summary)); st.caption("⚠️ **주의:** 투자 조언 아님. 모든 결정은 본인 책임.")
                     else: st.write("분석 요약 생성 불가.")
 
-                elif results is None or "error" in results: # 캐시 함수에서 오류 반환 시
+                elif results is None or ("error" in results and results["error"]): # 오류 딕셔너리 또는 None일 때
                     error_msg = results.get("error", "알 수 없는 분석 오류") if isinstance(results, dict) else "알 수 없는 분석 오류"
                     results_placeholder.error(f"분석 실패: {error_msg}")
-                else:
-                    results_placeholder.error("분석 결과 처리 실패.") # 예기치 않은 결과 타입
+                else: # 예기치 않은 결과 타입
+                    results_placeholder.error("분석 결과 처리 실패.")
             except Exception as e:
                 results_placeholder.error(f"앱 실행 중 예기치 않은 오류 발생: {e}")
-                st.exception(e) # Streamlit에서 오류 상세 정보 표시
+                st.exception(e) # 오류 상세 정보 표시
 else:
     results_placeholder.info("⬅️ 왼쪽 사이드바에서 분석 설정을 완료한 후 '분석 시작' 버튼을 클릭하세요.")
