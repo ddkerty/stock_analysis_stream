@@ -203,7 +203,6 @@ if analyze_button:
                     # ... (동일) ...
                     st.subheader("시장 심리 분석"); col_news, col_fng = st.columns([2, 1])
                     with col_news: st.markdown("**📰 뉴스 감정 분석**"); news_sentiment = results.get('news_sentiment', ["정보 없음"])
-                    if isinstance(news_sentiment, list) and len(news_sentiment) > 0: st.info(news_sentiment[0]); with st.expander("뉴스 목록 보기", expanded=False): [st.write(f"- {line}") for line in news_sentiment[1:]]
                         # 올바른 코드 (이 코드로 교체)
                         if isinstance(news_sentiment, list) and len(news_sentiment) > 0:
                             st.info(news_sentiment[0])
