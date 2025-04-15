@@ -1,4 +1,4 @@
-# app.py (ROE 추세 표시 기능 최종 추가)
+# app.py (부채비율, 유동비율 추세 표시 기능 추가)
 
 import streamlit as st
 import pandas as pd
@@ -34,10 +34,11 @@ except Exception as import_err:
 # --- Streamlit 페이지 설정 ---
 st.set_page_config(page_title="주식 분석 및 리스크 트래커", layout="wide", initial_sidebar_state="expanded")
 
-st.title("📊 주식 분석 및 예측 도구 v1.2") # 버전 업데이트
-st.markdown("과거 데이터 분석, 미래 예측과 함께 기업 기본 정보, 수익성 추세 및 보유 종목 리스크를 추적합니다.")
+st.title("📊 주식 분석 및 예측 도구 v1.3") # 버전 업데이트
+st.markdown("과거 데이터 분석, 미래 예측과 함께 기업 기본 정보, 재무 추세 및 보유 종목 리스크를 추적합니다.")
 
 # --- API 키 로드 (Secrets 우선, .env 차선) ---
+# ... (API 키 로드 로직은 이전과 동일하게 유지) ...
 NEWS_API_KEY = None; FRED_API_KEY = None; api_keys_loaded = False
 secrets_available = hasattr(st, 'secrets')
 sidebar_status = st.sidebar.empty()
@@ -59,14 +60,15 @@ if not api_keys_loaded: st.sidebar.error("API 키 로드 실패! 기능 제한�
 
 # --- 사이드바 설정 ---
 with st.sidebar:
+    # ... (이전과 동일) ...
     st.header("⚙️ 분석 설정")
     ticker_input = st.text_input("종목 티커 입력 (예: AAPL, 005930.KS)", value="AAPL")
     analysis_years = st.select_slider("분석 기간 선택", options=[1, 2, 3, 5, 7, 10], value=2)
     st.caption(f"과거 {analysis_years}년 데이터를 분석합니다.")
     forecast_days = st.number_input("예측 기간 (일)", min_value=7, max_value=90, value=30, step=7)
     st.caption(f"향후 {forecast_days}일 후까지 예측합니다.")
-    num_trend_periods_input = st.number_input("수익성 추세 분기 수", min_value=2, max_value=12, value=4, step=1)
-    st.caption(f"최근 {num_trend_periods_input}개 분기의 수익성 추세를 계산합니다.")
+    num_trend_periods_input = st.number_input("재무 추세 분기 수", min_value=2, max_value=12, value=4, step=1) # 라벨 변경
+    st.caption(f"최근 {num_trend_periods_input}개 분기의 수익성/안정성 추세를 계산합니다.") # 캡션 변경
     st.divider()
     st.header("💰 보유 정보 입력 (선택)")
     avg_price = st.number_input("평단가 (Average Price)", min_value=0.0, value=0.0, format="%.2f")
@@ -81,10 +83,10 @@ results_placeholder = st.container()
 # 캐시된 분석 함수 정의
 @st.cache_data(ttl=timedelta(hours=1))
 def run_cached_analysis(ticker, news_key, fred_key, years, days, num_trend_periods):
+    # ... (이전과 동일) ...
     """캐싱을 위한 분석 함수 래퍼"""
     if not news_key or not fred_key: return {"error": "API 키 미유효"}
-    try:
-        return sa.analyze_stock(ticker, news_key, fred_key, analysis_period_years=years, forecast_days=days, num_trend_periods=num_trend_periods)
+    try: return sa.analyze_stock(ticker, news_key, fred_key, analysis_period_years=years, forecast_days=days, num_trend_periods=num_trend_periods)
     except Exception as e: logging.error(f"분석 함수 실행 오류: {e}"); logging.error(traceback.format_exc()); return {"error": f"분석 중 오류 발생: {e}"}
 
 if analyze_button:
@@ -101,6 +103,7 @@ if analyze_button:
                     st.header(f"📈 {ticker_processed} 분석 결과")
 
                     # 1. 기본 정보
+                    # ... (동일) ...
                     st.subheader("요약 정보")
                     col1, col2, col3 = st.columns(3)
                     col1.metric("현재가 (최근 종가)", f"${results.get('current_price', 'N/A')}")
@@ -108,6 +111,7 @@ if analyze_button:
                     col3.metric("분석 종료일", results.get('analysis_period_end', 'N/A'))
 
                     # 2. 기본적 분석(Fundamental) 데이터 표시
+                    # ... (동일) ...
                     st.subheader("📊 기업 기본 정보 (Fundamentals)")
                     fundamentals = results.get('fundamentals');
                     if fundamentals and isinstance(fundamentals, dict) and fundamentals.get("시가총액", "N/A") != "N/A":
@@ -120,69 +124,91 @@ if analyze_button:
                         if summary != "N/A":
                             with st.expander("회사 요약 보기"): st.write(summary)
                         st.caption("데이터 출처: Yahoo Finance")
-                    else: st.warning("기업 기본 정보(펀더멘탈)를 가져오지 못했습니다.")
+                    else: st.warning("기업 기본 정보를 가져오지 못했습니다.")
 
-                    # 3. 수익성 추세 (영업이익률 & ROE)
-                    st.subheader(f"📈 수익성 추세 (최근 {num_trend_periods_input} 분기)")
-                    # 영업이익률
-                    st.markdown("##### 영업이익률 (Operating Margin %)")
-                    margin_trend_data = results.get('operating_margin_trend')
-                    if margin_trend_data and isinstance(margin_trend_data, list):
-                        try:
-                            df_margin = pd.DataFrame(margin_trend_data); df_margin['Date'] = pd.to_datetime(df_margin['Date']); df_margin.set_index('Date', inplace=True)
-                            st.line_chart(df_margin[['Operating Margin (%)']])
-                            with st.expander("영업이익률 데이터 보기"): st.dataframe(df_margin.style.format({"Operating Margin (%)": "{:.2f}%"}), use_container_width=True)
-                        except Exception as margin_err: st.error(f"영업이익률 추세 처리/표시 오류: {margin_err}")
-                    else: st.info("영업이익률 추세 데이터 없음.")
+                    # 3. 주요 재무 추세 (수익성, 안정성 등)
+                    st.subheader(f"📈 주요 재무 추세 (최근 {num_trend_periods_input} 분기)")
+                    # --- 탭(Tab)을 사용하여 여러 추세 표시 ---
+                    tab1, tab2, tab3, tab4 = st.tabs(["영업이익률(%)", "ROE(%)", "부채비율", "유동비율"])
 
-                    # --- ✨ ROE 추세 표시 (신규 추가) ---
-                    st.markdown("##### ROE (자기자본이익률 %)")
-                    roe_trend_data = results.get('roe_trend') # 백엔드에서 추가된 키
+                    with tab1: # 영업이익률 탭
+                         margin_trend_data = results.get('operating_margin_trend')
+                         if margin_trend_data and isinstance(margin_trend_data, list):
+                             try:
+                                 df_margin = pd.DataFrame(margin_trend_data); df_margin['Date'] = pd.to_datetime(df_margin['Date']); df_margin.set_index('Date', inplace=True)
+                                 st.line_chart(df_margin[['Operating Margin (%)']])
+                                 with st.expander("데이터 테이블 보기"): st.dataframe(df_margin.style.format({"Operating Margin (%)": "{:.2f}%"}), use_container_width=True)
+                             except Exception as e: st.error(f"영업이익률 처리/표시 오류: {e}")
+                         else: st.info("영업이익률 추세 데이터 없음.")
 
-                    if roe_trend_data and isinstance(roe_trend_data, list):
-                        try:
-                            df_roe = pd.DataFrame(roe_trend_data)
-                            df_roe['Date'] = pd.to_datetime(df_roe['Date'])
-                            df_roe.set_index('Date', inplace=True)
+                    with tab2: # ROE 탭
+                         roe_trend_data = results.get('roe_trend')
+                         if roe_trend_data and isinstance(roe_trend_data, list):
+                             try:
+                                 df_roe = pd.DataFrame(roe_trend_data); df_roe['Date'] = pd.to_datetime(df_roe['Date']); df_roe.set_index('Date', inplace=True)
+                                 st.line_chart(df_roe[['ROE (%)']])
+                                 with st.expander("ROE 데이터 보기"): st.dataframe(df_roe.style.format({"ROE (%)": "{:.2f}%"}), use_container_width=True)
+                             except Exception as e: st.error(f"ROE 처리/표시 오류: {e}")
+                         else: st.info("ROE 추세 데이터 없음.")
 
-                            # ROE(%) 컬럼 선택하여 라인 차트 그리기
-                            st.line_chart(df_roe[['ROE (%)']])
+                    # --- ✨ 부채비율(D/E Ratio) 탭 (신규 추가) ---
+                    with tab3:
+                        debt_trend_data = results.get('debt_to_equity_trend')
+                        if debt_trend_data and isinstance(debt_trend_data, list):
+                            try:
+                                df_debt = pd.DataFrame(debt_trend_data)
+                                df_debt['Date'] = pd.to_datetime(df_debt['Date'])
+                                df_debt.set_index('Date', inplace=True)
+                                # 부채비율은 %가 아님 (소수점 표시)
+                                st.line_chart(df_debt[['D/E Ratio']])
+                                with st.expander("부채비율 데이터 보기"):
+                                    st.dataframe(df_debt.style.format({"D/E Ratio": "{:.2f}"}), use_container_width=True)
+                            except Exception as e:
+                                st.error(f"부채비율 추세 데이터를 처리/표시하는 중 오류 발생: {e}")
+                        else:
+                            st.info("부채비율 추세 데이터를 가져올 수 없거나 해당 기간 데이터가 없습니다.")
+                    # ------------------------------------------
 
-                            # 상세 데이터 테이블 (Expander 안)
-                            with st.expander("ROE 데이터 보기"):
-                                st.dataframe(df_roe.style.format({"ROE (%)": "{:.2f}%"}), use_container_width=True)
-                        except Exception as roe_err:
-                            st.error(f"ROE 추세 데이터를 처리/표시하는 중 오류 발생: {roe_err}")
-                    elif roe_trend_data is None:
-                         st.info("ROE 추세 데이터를 가져올 수 없거나 해당 기간 데이터가 없습니다.")
-                    else: # 빈 리스트 등
-                         st.info("표시할 ROE 추세 데이터가 없습니다.")
+                    # --- ✨ 유동비율(Current Ratio) 탭 (신규 추가) ---
+                    with tab4:
+                        current_trend_data = results.get('current_ratio_trend')
+                        if current_trend_data and isinstance(current_trend_data, list):
+                            try:
+                                df_current = pd.DataFrame(current_trend_data)
+                                df_current['Date'] = pd.to_datetime(df_current['Date'])
+                                df_current.set_index('Date', inplace=True)
+                                # 유동비율도 %가 아님 (소수점 표시)
+                                st.line_chart(df_current[['Current Ratio']])
+                                with st.expander("유동비율 데이터 보기"):
+                                    st.dataframe(df_current.style.format({"Current Ratio": "{:.2f}"}), use_container_width=True)
+                            except Exception as e:
+                                st.error(f"유동비율 추세 데이터를 처리/표시하는 중 오류 발생: {e}")
+                        else:
+                            st.info("유동비율 추세 데이터를 가져올 수 없거나 해당 기간 데이터가 없습니다.")
+                    # ------------------------------------------
                     st.divider()
-                    # ------------------------------------
+
 
                     # 4. 기술적 분석 (차트)
+                    # ... (동일) ...
                     st.subheader("기술적 분석 차트"); stock_chart_fig = results.get('stock_chart_fig')
                     if stock_chart_fig: st.plotly_chart(stock_chart_fig, use_container_width=True)
                     else: st.warning("주가 차트 생성 실패.")
                     st.divider()
 
                     # 5. 시장 심리
+                    # ... (동일) ...
                     st.subheader("시장 심리 분석"); col_news, col_fng = st.columns([2, 1])
-                    with col_news:
-                        st.markdown("**📰 뉴스 감정 분석**"); news_sentiment = results.get('news_sentiment', ["정보 없음"])
-                        if isinstance(news_sentiment, list) and len(news_sentiment) > 0:
-                            st.info(news_sentiment[0])
-                            with st.expander("최근 뉴스 목록 보기", expanded=False):
-                                for line in news_sentiment[1:]: # 수정된 for 반복문 사용
-                                    st.write(f"- {line}")
-                        else: st.write(news_sentiment)
-                    with col_fng:
-                        st.markdown("**😨 공포-탐욕 지수**"); fng_index = results.get('fear_greed_index', "N/A")
-                        if isinstance(fng_index, dict): st.metric(label="현재 지수", value=fng_index.get('value', 'N/A'), delta=fng_index.get('classification', ''))
-                        else: st.write(fng_index)
+                    with col_news: st.markdown("**📰 뉴스 감정 분석**"); news_sentiment = results.get('news_sentiment', ["정보 없음"])
+                    if isinstance(news_sentiment, list) and len(news_sentiment) > 0: st.info(news_sentiment[0]); with st.expander("최근 뉴스 목록 보기", expanded=False): [st.write(f"- {line}") for line in news_sentiment[1:]]
+                    else: st.write(news_sentiment)
+                    with col_fng: st.markdown("**😨 공포-탐욕 지수**"); fng_index = results.get('fear_greed_index', "N/A")
+                    if isinstance(fng_index, dict): st.metric(label="현재 지수", value=fng_index.get('value', 'N/A'), delta=fng_index.get('classification', ''))
+                    else: st.write(fng_index)
                     st.divider()
 
                     # 6. Prophet 예측 분석
+                    # ... (동일) ...
                     st.subheader("Prophet 주가 예측"); forecast_fig = results.get('forecast_fig'); forecast_data_list = results.get('prophet_forecast')
                     if forecast_fig: st.plotly_chart(forecast_fig, use_container_width=True)
                     elif isinstance(forecast_data_list, str): st.info(forecast_data_list)
@@ -194,8 +220,8 @@ if analyze_button:
                     st.divider()
 
                     # 7. 리스크 트래커
+                    # ... (동일) ...
                     st.subheader("🚨 리스크 트래커 (예측 기반)")
-                    # ... (이전과 동일) ...
                     if avg_price > 0 and isinstance(forecast_data_list, list):
                         df_pred = pd.DataFrame(forecast_data_list);
                         try:
@@ -221,11 +247,10 @@ if analyze_button:
                     else: st.warning("Prophet 예측 데이터 유효하지 않아 리스크 분석 불가.")
                     st.divider()
 
-
                     # 8. 자동 분석 결과 요약
                     st.subheader("🧐 자동 분석 결과 요약 (참고용)")
                     summary = []
-                    # ... (기존 요약 로직 + ROE 요약 추가) ...
+                    # ... (기존 요약 로직 + ROE + 부채/유동비율 요약 추가) ...
                     if isinstance(forecast_data_list, list) and len(forecast_data_list) > 0:
                         try: start_pred = forecast_data_list[0]['yhat']; end_pred = forecast_data_list[-1]['yhat']; trend_obs = "상승" if end_pred > start_pred else "하락" if end_pred < start_pred else "횡보"; summary.append(f"- Prophet 예측: 향후 {forecast_days}일간 **{trend_obs}** 추세 예상 (${forecast_data_list[-1]['yhat_lower']:.2f} ~ ${forecast_data_list[-1]['yhat_upper']:.2f}).")
                         except: summary.append("- 예측 요약 오류.")
@@ -237,34 +262,22 @@ if analyze_button:
                     if per_val != "N/A": fund_summary.append(f"PER {per_val}");
                     if sector_val != "N/A": fund_summary.append(f"'{sector_val}' 업종");
                     if fund_summary: summary.append(f"- 기업 정보: {', '.join(fund_summary)}.")
-                    # ROE 추세 요약 추가
-                    roe_trend_data = results.get('roe_trend') # 요약 위해 다시 가져옴
-                    if roe_trend_data and isinstance(roe_trend_data, list) and len(roe_trend_data) >= 2:
-                        try:
-                            # 데이터 프레임으로 변환하여 숫자 처리 후 비교
-                            df_roe_summary = pd.DataFrame(roe_trend_data)
-                            df_roe_summary['ROE (%)'] = pd.to_numeric(df_roe_summary['ROE (%)'], errors='coerce')
-                            df_roe_summary.dropna(subset=['ROE (%)'], inplace=True)
-                            if len(df_roe_summary) >= 2:
-                                first_roe = df_roe_summary['ROE (%)'].iloc[0]
-                                last_roe = df_roe_summary['ROE (%)'].iloc[-1]
-                                roe_trend_desc = "개선" if last_roe > first_roe else "악화" if last_roe < first_roe else "유지"
-                                summary.append(f"- 수익성(ROE): 최근 {len(roe_trend_data)}분기 **{roe_trend_desc}** 추세 (최근 {last_roe:.2f}%).")
-                        except Exception as e: logging.warning(f"ROE 요약 생성 중 오류: {e}")
+                    # 수익성/안정성 추세 요약 추가
+                    roe_trend_data = results.get('roe_trend'); debt_trend_data = results.get('debt_to_equity_trend'); current_trend_data = results.get('current_ratio_trend')
+                    trend_summary = []
+                    if roe_trend_data and isinstance(roe_trend_data, list) and len(roe_trend_data) >= 1: trend_summary.append(f"ROE {roe_trend_data[-1]['ROE (%)']:.2f}%")
+                    if debt_trend_data and isinstance(debt_trend_data, list) and len(debt_trend_data) >= 1: trend_summary.append(f"부채비율 {debt_trend_data[-1]['D/E Ratio']:.2f}")
+                    if current_trend_data and isinstance(current_trend_data, list) and len(current_trend_data) >= 1: trend_summary.append(f"유동비율 {current_trend_data[-1]['Current Ratio']:.2f}")
+                    if trend_summary: summary.append(f"- 최근 재무 추세: {', '.join(trend_summary)}.")
 
-                    if avg_price > 0 and isinstance(forecast_data_list, list) and 'risk_days' in locals(): # risk_days 정의 여부 확인
+                    if avg_price > 0 and isinstance(forecast_data_list, list) and 'risk_days' in locals():
                         if risk_days > 0: summary.append(f"- 리스크: 예측 하한선 기준, **{risk_days}일** 평단가 하회 가능성 (최대 손실률 {max_loss_pct:.2f}%).")
                         else: summary.append(f"- 리스크: 예측 하한선 기준, 평단가 하회 리스크 없음.")
                     if summary: st.markdown("\n".join(summary)); st.caption("⚠️ **주의:** 투자 조언 아님. 모든 결정은 본인 책임.")
                     else: st.write("분석 요약 생성 불가.")
 
-                elif results is None or ("error" in results and results["error"]): # 오류 딕셔너리 또는 None일 때
-                    error_msg = results.get("error", "알 수 없는 분석 오류") if isinstance(results, dict) else "알 수 없는 분석 오류"
-                    results_placeholder.error(f"분석 실패: {error_msg}")
-                else: # 예기치 않은 결과 타입
-                    results_placeholder.error("분석 결과 처리 실패.")
-            except Exception as e:
-                results_placeholder.error(f"앱 실행 중 예기치 않은 오류 발생: {e}")
-                st.exception(e) # 오류 상세 정보 표시
+                elif results is None or ("error" in results and results["error"]): results_placeholder.error(f"분석 실패: {results.get('error', '알 수 없음') if isinstance(results, dict) else '알 수 없음'}")
+                else: results_placeholder.error("분석 결과 처리 실패.")
+            except Exception as e: results_placeholder.error(f"앱 실행 중 예기치 않은 오류 발생: {e}"); st.exception(e)
 else:
     results_placeholder.info("⬅️ 왼쪽 사이드바에서 분석 설정을 완료한 후 '분석 시작' 버튼을 클릭하세요.")
