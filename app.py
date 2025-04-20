@@ -582,10 +582,19 @@ elif page == "📈 기술 분석":
                                         band_width = latest_row['Upper'] - latest_row['Lower']
                                         if band_width > 0:
                                             position_ratio = (latest_row['Close'] - latest_row['Lower']) / band_width
-                                            if position_ratio > 0.75: signal_messages.append("✅ **BB 내 상단 근접**")
-                                            elif position_ratio < 0.25: signal_messages.append("✅ **BB 내 하단 근접**")
-                                            else: signal_messages.append("✅ **BB 내 중앙 위치**")
-                                        else: signal_messages.append("✅ **BB 범위 내 위치**")
+                                            if latest_row['Close'] > latest_row['Upper']:
+                                                signal_messages.append("🚨 **현재가가 볼린저밴드 상단을 돌파했습니다.**\n→ 이는 단기 과매수 상태일 수 있으며, 강한 상승 추세가 이어질 수도 있습니다. 조정 가능성도 염두에 두어야 합니다.")
+                                            elif latest_row['Close'] < latest_row['Lower']:
+                                                signal_messages.append("💡 **현재가가 볼린저밴드 하단을 하회했습니다.**\n→ 이는 단기 과매도 상태로 간주될 수 있으며, 반등 가능성 또는 약세 추세 지속을 의미할 수 있습니다.")
+                                            elif position_ratio > 0.75:
+                                                signal_messages.append("📈 **현재가가 밴드 상단에 근접해 있습니다.**\n→ 상승 압력이 강할 수 있으며, 상단 돌파를 시도 중일 수 있습니다.")
+                                            elif position_ratio < 0.25:
+                                                signal_messages.append("📉 **현재가가 밴드 하단에 근접해 있습니다.**\n→ 하락 압력이 우세할 수 있으며, 지지선 테스트 중일 수 있습니다.")
+                                            else:
+                                                signal_messages.append("↔️ **현재가가 밴드 중앙 근처에 위치합니다.**\n→ 특별한 추세 없이 방향성을 탐색 중이거나 횡보 국면일 수 있습니다.")
+                                        else:
+                                            signal_messages.append("✅ **볼린저밴드 상하단이 거의 같아 방향성 판단 어려움**")
+
                                 # --- for 루프 사용 (V1.9.6 변경점) ---
                                 if signal_messages:
                                     for msg in signal_messages: # 표준 for 반복문 사용
