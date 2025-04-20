@@ -76,6 +76,6 @@ def interpret_fibonacci(df, close_value=None):
 '''
 
 # 파일로 저장
-file_path = Path("/mnt/data/short_term_analysis.py")
-file_path.write_text(short_term_analysis_code, encoding='utf-8')
-file_path
+#file_path = Path("/mnt/data/short_term_analysis.py")
+#file_path.write_text(short_term_analysis_code, encoding='utf-8')
+#file_path
