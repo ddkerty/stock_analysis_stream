@@ -12,6 +12,9 @@ import plotly.graph_objects as go
 import numpy as np
 import logging
 import yfinance as yf
+from short_term_analysis import interpret_fibonacci
+from technical_interpret import interpret_technical_signals
+
 
 # --- 기본 경로 설정 및 로깅 ---
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -565,44 +568,24 @@ elif page == "📈 기술 분석":
 
                             # --- 자동 해석 기능 ---
                             st.divider()
+                            # --- 자동 해석 기능 ---
+                            st.divider()
                             st.subheader("🧠 기술적 시그널 해석 (참고용)")
+
                             if not df_calculated.empty:
                                 latest_row = df_calculated.iloc[-1]
-                                signal_messages = []
-                                # VWAP 해석
-                                if 'VWAP' in latest_row and pd.notna(latest_row['VWAP']):
-                                    if latest_row['Close'] > latest_row['VWAP']: signal_messages.append("📈 **현재가 > VWAP:** 매수세 우위 가능성")
-                                    elif latest_row['Close'] < latest_row['VWAP']: signal_messages.append("📉 **현재가 < VWAP:** 매도세 우위 가능성")
-                                    else: signal_messages.append("↔️ **현재가 = VWAP:** 방향성 탐색")
-                                # Bollinger Bands 해석
-                                if 'Upper' in latest_row and 'Lower' in latest_row and pd.notna(latest_row['Upper']) and pd.notna(latest_row['Lower']):
-                                    if latest_row['Close'] > latest_row['Upper']: signal_messages.append("🚨 **> BB 상단:** 단기 과매수/추세 지속 시 강세")
-                                    elif latest_row['Close'] < latest_row['Lower']: signal_messages.append("💡 **< BB 하단:** 단기 과매도/추세 지속 시 약세")
-                                    else:
-                                        band_width = latest_row['Upper'] - latest_row['Lower']
-                                        if band_width > 0:
-                                            position_ratio = (latest_row['Close'] - latest_row['Lower']) / band_width
-                                            if latest_row['Close'] > latest_row['Upper']:
-                                                signal_messages.append("🚨 **현재가가 볼린저밴드 상단을 돌파했습니다.**\n→ 이는 단기 과매수 상태일 수 있으며, 강한 상승 추세가 이어질 수도 있습니다. 조정 가능성도 염두에 두어야 합니다.")
-                                            elif latest_row['Close'] < latest_row['Lower']:
-                                                signal_messages.append("💡 **현재가가 볼린저밴드 하단을 하회했습니다.**\n→ 이는 단기 과매도 상태로 간주될 수 있으며, 반등 가능성 또는 약세 추세 지속을 의미할 수 있습니다.")
-                                            elif position_ratio > 0.75:
-                                                signal_messages.append("📈 **현재가가 밴드 상단에 근접해 있습니다.**\n→ 상승 압력이 강할 수 있으며, 상단 돌파를 시도 중일 수 있습니다.")
-                                            elif position_ratio < 0.25:
-                                                signal_messages.append("📉 **현재가가 밴드 하단에 근접해 있습니다.**\n→ 하락 압력이 우세할 수 있으며, 지지선 테스트 중일 수 있습니다.")
-                                            else:
-                                                signal_messages.append("↔️ **현재가가 밴드 중앙 근처에 위치합니다.**\n→ 특별한 추세 없이 방향성을 탐색 중이거나 횡보 국면일 수 있습니다.")
-                                        else:
-                                            signal_messages.append("✅ **볼린저밴드 상하단이 거의 같아 방향성 판단 어려움**")
+                                signal_messages = interpret_technical_signals(latest_row)  # 🔁 모듈 호출
 
-                                # --- for 루프 사용 (V1.9.6 변경점) ---
                                 if signal_messages:
-                                    for msg in signal_messages: # 표준 for 반복문 사용
+                                    for msg in signal_messages:
                                         st.info(msg)
-                                # --- 수정 끝 ---
-                                else: st.info("특별한 기술적 시그널 없음 (VWAP/BB 기준).")
-                                st.caption("⚠️ **주의:** 자동 해석은 참고용이며 투자 결정은 신중히 하세요.")
-                            else: st.warning("해석할 데이터가 없습니다.")
+                                else:
+                                    st.info("특별한 기술적 시그널은 감지되지 않았습니다.")
+
+                                st.caption("⚠️ **주의:** 자동 해석은 참고용이며, 투자 결정은 종합 판단 하에 신중히 하세요.")
+                            else:
+                                st.warning("해석할 데이터가 없습니다.")
+
 
                     except Exception as e: # 예상 못한 오류
                         st.error(f"기술적 분석 처리 중 오류: {type(e).__name__} - {e}")

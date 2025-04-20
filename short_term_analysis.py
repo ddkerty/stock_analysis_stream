@@ -43,6 +43,37 @@ def plot_fibonacci_chart(df: pd.DataFrame):
 
     fig.update_layout(title="Fibonacci Retracement Chart", height=600)
     return fig
+
+def interpret_fibonacci(df, close_value=None):
+    """피보나치 레벨 해석"""
+    if 'High' not in df.columns or 'Low' not in df.columns or df.empty:
+        return "📏 피보나치 해석 불가 (데이터 부족)"
+
+    high_price = df['High'].max()
+    low_price = df['Low'].min()
+    diff = high_price - low_price
+
+    if diff <= 0:
+        return "📏 피보나치 해석 불가 (고점=저점)"
+
+    fib_levels = {
+        "0.236": high_price - 0.236 * diff,
+        "0.382": high_price - 0.382 * diff,
+        "0.5": high_price - 0.5 * diff,
+        "0.618": high_price - 0.618 * diff,
+    }
+
+    close = close_value if close_value is not None else df['Close'].iloc[-1]
+    closest_level, level_value = min(fib_levels.items(), key=lambda x: abs(close - x[1]))
+
+    explanation = {
+        "0.236": "약한 되돌림 → 강한 추세 지속 가능성",
+        "0.382": "일반 되돌림 → 단기 저항 가능성",
+        "0.5": "심리적 중간선 → 방향성 탐색 구간",
+        "0.618": "강한 되돌림 → 반등 또는 지지 시도 주시"
+    }.get(closest_level, "")
+
+    return f"📏 **현재가 (${close:.2f})는 Fib {closest_level} (${level_value:.2f}) 근처** → {explanation}"
 '''
 
 # 2. app.py 수정용 샘플 코드 (Fibonacci 탭 추가)
