@@ -139,6 +139,16 @@ with st.sidebar:
     page = st.radio("분석 유형 선택", ["📊 종합 분석", "📈 기술 분석"], captions=["재무, 예측, 뉴스 등", "VWAP, BB, 피보나치 등"], key="page_selector")
     st.markdown("---")
     if page == "📊 종합 분석":
+        st.header("⚙️ 종합 분석 설정")
+        # V1.8 코드의 해당 라인을 아래와 같이 수정
+        ticker_input = st.text_input(
+            "종목 티커",
+            value="AAPL",  # 기본값은 그대로 두거나 원하는 것으로 변경
+            key="main_ticker",
+            # help 파라미터 수정
+            help="해외(예: AAPL, MSFT) 또는 국내(예: 005930.KS) 티커 입력",
+            disabled=not comprehensive_analysis_possible
+        )
         # (V1.7과 동일한 종합 분석 설정 로직)
         st.header("⚙️ 종합 분석 설정")
         ticker_input = st.text_input("종목 티커", "AAPL", key="main_ticker", disabled=not comprehensive_analysis_possible)
@@ -241,9 +251,18 @@ if page == "📊 종합 분석":
 
 # ============== 📈 기술 분석 탭 (Bollinger Bands 추가) ==============
 elif page == "📈 기술 분석":
-    st.title("📈 기술적 분석 (VWAP + Bollinger + Fibonacci)") # 제목 수정
-    st.markdown("VWAP, 볼린저밴드, 피보나치 되돌림 수준을 함께 시각화합니다.") # 설명 수정
+    st.title("📈 기술적 분석 (VWAP + Bollinger + Fibonacci)")
+    st.markdown("VWAP, 볼린저밴드, 피보나치 되돌림 수준을 함께 시각화합니다.")
     st.markdown("---")
+
+    # V1.8 코드의 해당 라인을 아래와 같이 수정 (help 추가)
+    ticker_tech = st.text_input(
+        "종목 티커",
+        value="AAPL", # 기본값
+        key="tech_ticker",
+        # help 파라미터 추가
+        help="해외(예: AAPL, TSLA) 또는 국내(예: 005930.KS) 티커 입력"
+    )
 
     # 입력 위젯 (V1.7과 동일)
     ticker_tech = st.text_input("종목 티커", "AAPL", key="tech_ticker")
