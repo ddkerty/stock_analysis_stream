@@ -152,12 +152,12 @@ with st.sidebar:
         st.header("⚙️ 종합 분석 설정")
         ticker_input = st.text_input("종목 티커", "AAPL", key="main_ticker", help="해외(예: AAPL) 또는 국내(예: 005930.KS) 티커", disabled=not comprehensive_analysis_possible)
         analysis_years = st.select_slider("분석 기간 (년)", [1, 2, 3, 5, 7, 10], 2, key="analysis_years", disabled=not comprehensive_analysis_possible)
-        st.caption(f"과거 {analysis_years}년 데이터 분석")
+    st.caption(f"과거 {analysis_years}년 데이터 분석")
         forecast_days = st.number_input("예측 기간 (일)", 7, 90, 30, 7, key="forecast_days", disabled=not comprehensive_analysis_possible)
-        st.caption(f"향후 {forecast_days}일 예측")
+    st.caption(f"향후 {forecast_days}일 예측")
         num_trend_periods_input = st.number_input("재무 추세 분기 수", 2, 12, 4, 1, key="num_trend_periods", disabled=not comprehensive_analysis_possible)
-        st.caption(f"최근 {num_trend_periods_input}개 분기 재무 추세 계산")
-        st.divider()
+    st.caption(f"최근 {num_trend_periods_input}개 분기 재무 추세 계산")
+    st.divider()
         st.subheader("⚙️ 예측 세부 설정 (선택)")
         changepoint_prior_input = st.slider("추세 변화 민감도 (Prophet)", 0.001, 0.5, 0.05, 0.01, "%.3f", help="클수록 과거 추세 변화에 민감 (기본값: 0.05)", key="changepoint_prior", disabled=not comprehensive_analysis_possible)
         st.caption(f"현재 민감도: {changepoint_prior_input:.3f}")
@@ -173,7 +173,7 @@ with st.sidebar:
         bb_window = st.number_input("볼린저밴드 기간 (일)", 5, 50, 20, 1, key="bb_window")
         bb_std = st.number_input("볼린저밴드 표준편차 배수", 1.0, 3.0, 2.0, 0.1, key="bb_std", format="%.1f")
         st.caption(f"현재 설정: {bb_window}일 기간, {bb_std:.1f} 표준편차")
-        st.divider()
+    st.divider()
 
 # --- 캐시된 종합 분석 함수 ---
 @st.cache_data(ttl=timedelta(hours=1))
@@ -211,26 +211,26 @@ if page == "📊 종합 분석":
         avg_p = st.session_state.get('avg_price', 0.0)
         qty = st.session_state.get('quantity', 0)
         if not ticker: results_placeholder.warning("종목 티커 입력 필요.")
-        else:
+    else:
             ticker_proc = ticker.strip().upper()
             with st.spinner(f"{ticker_proc} 종합 분석 중..."):
                 try:
                     results = run_cached_analysis(ticker_proc, NEWS_API_KEY, FRED_API_KEY, years, days, periods, cp_prior)
                     results_placeholder.empty()
-                    if results and isinstance(results, dict) and "error" not in results:
+                if results and isinstance(results, dict) and "error" not in results:
                         # === 상세 결과 표시 (V1.9.5 내용 유지, 재무추세 부분 가독성 수정) ===
                         st.header(f"📈 {ticker_proc} 분석 결과 (민감도: {cp_prior:.3f})")
                         # 1. 요약 정보
-                        st.subheader("요약 정보")
-                        col1, col2, col3 = st.columns(3)
+                    st.subheader("요약 정보")
+                    col1, col2, col3 = st.columns(3)
                         col1.metric("현재가", f"${results.get('current_price', 'N/A')}")
-                        col2.metric("분석 시작일", results.get('analysis_period_start', 'N/A'))
-                        col3.metric("분석 종료일", results.get('analysis_period_end', 'N/A'))
+                    col2.metric("분석 시작일", results.get('analysis_period_start', 'N/A'))
+                    col3.metric("분석 종료일", results.get('analysis_period_end', 'N/A'))
                         # 2. 기본적 분석
                         st.subheader("📊 기업 기본 정보")
                         fundamentals = results.get('fundamentals')
-                        if fundamentals and isinstance(fundamentals, dict) and fundamentals.get("시가총액", "N/A") != "N/A":
-                            colf1, colf2, colf3 = st.columns(3)
+                    if fundamentals and isinstance(fundamentals, dict) and fundamentals.get("시가총액", "N/A") != "N/A":
+                        colf1, colf2, colf3 = st.columns(3)
                             with colf1:
                                 st.metric("시가총액", fundamentals.get("시가총액", "N/A"))
                                 st.metric("PER", fundamentals.get("PER", "N/A"))
@@ -242,15 +242,15 @@ if page == "📊 종합 분석":
                                 st.metric("업종", fundamentals.get("업종", "N/A"))
                             industry = fundamentals.get("산업", "N/A")
                             summary = fundamentals.get("요약", "N/A")
-                            if industry != "N/A": st.markdown(f"**산업:** {industry}")
-                            if summary != "N/A":
+                        if industry != "N/A": st.markdown(f"**산업:** {industry}")
+                        if summary != "N/A":
                                 with st.expander("회사 요약 보기"):
                                     st.write(summary) # SyntaxError 수정 완료
                             st.caption("Data Source: Yahoo Finance")
                         else: st.warning("기업 기본 정보 로드 실패.")
                         # 3. 주요 재무 추세
                         st.subheader(f"📈 주요 재무 추세 (최근 {periods} 분기)")
-                        tab_titles = ["영업이익률(%)", "ROE(%)", "부채비율", "유동비율"]
+                    tab_titles = ["영업이익률(%)", "ROE(%)", "부채비율", "유동비율"]
                         tabs = st.tabs(tab_titles)
                         trend_data_map = {
                             "영업이익률(%)": ('operating_margin_trend', 'Op Margin (%)', "{:.2f}%"),
@@ -279,7 +279,7 @@ if page == "📊 종합 분석":
                                             st.error(f"{title} 표시 오류: {e}")
                                     else:
                                         st.info(f"{title} 추세 데이터 없음.")
-                        st.divider()
+                    st.divider()
                         # 4. 기술적 분석 차트 (종합)
                         st.subheader("기술적 분석 차트 (종합)")
                         stock_chart_fig = results.get('stock_chart_fig')
@@ -287,22 +287,22 @@ if page == "📊 종합 분석":
                             st.plotly_chart(stock_chart_fig, use_container_width=True)
                         else:
                             st.warning("주가 차트 생성 실패 (종합).")
-                            st.divider()
+                    st.divider()
                         # 5. 시장 심리 분석
                         st.subheader("시장 심리 분석")
                         col_news, col_fng = st.columns([2, 1])
-                        with col_news:
+                    with col_news:
                             st.markdown("**📰 뉴스 감정 분석**")
                             news_sentiment = results.get('news_sentiment', ["정보 없음."])
-                            if isinstance(news_sentiment, list) and len(news_sentiment) > 0:
-                                st.info(news_sentiment[0])
+                        if isinstance(news_sentiment, list) and len(news_sentiment) > 0:
+                            st.info(news_sentiment[0])
                                 if len(news_sentiment) > 1:
                                     with st.expander("뉴스 목록 보기"): # for 루프 사용 (V1.9.6 변경점)
                                         for line in news_sentiment[1:]:
-                                            st.write(f"- {line}")
+                                    st.write(f"- {line}")
                             else:
                                 st.write(str(news_sentiment))
-                        with col_fng:
+                    with col_fng:
                             st.markdown("**😨 공포-탐욕 지수**")
                             fng_index = results.get('fear_greed_index', "N/A")
                             if isinstance(fng_index, dict):
@@ -328,15 +328,15 @@ if page == "📊 종합 분석":
                                 st.dataframe(df_fcst[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(10).style.format({'yhat': "{:.2f}", 'yhat_lower': "{:.2f}", 'yhat_upper': "{:.2f}"}), use_container_width=True)
                             except Exception as e:
                                 st.error(f"예측 데이터 표시 오류: {e}")
-                        cv_plot_path = results.get('cv_plot_path')
+                    cv_plot_path = results.get('cv_plot_path')
                         if cv_plot_path and os.path.exists(cv_plot_path):
                             st.markdown("**📉 교차 검증 결과 (MAPE)**")
                             st.image(cv_plot_path, caption="MAPE (낮을수록 정확)")
                         elif cv_plot_path is None and isinstance(forecast_data_list, list):
                             st.caption("교차 검증(CV) 결과 없음.")
-                            st.divider()
-                        # 7. 리스크 트래커
-                        st.subheader("🚨 리스크 트래커 (예측 기반)")
+                    st.divider()
+                    # 7. 리스크 트래커
+                    st.subheader("🚨 리스크 트래커 (예측 기반)")
                         risk_days, max_loss_pct, max_loss_amt = 0, 0, 0
                         if avg_p > 0 and isinstance(forecast_data_list, list) and len(forecast_data_list) > 0:
                             try:
@@ -569,7 +569,7 @@ elif page == "📈 기술 분석":
                             # --- 자동 해석 기능 ---
                             st.divider()
                             # --- 자동 해석 기능 ---
-                            st.divider()
+                    st.divider()
                             st.subheader("🧠 기술적 시그널 해석 (참고용)")
 
                             if not df_calculated.empty:
@@ -583,7 +583,7 @@ elif page == "📈 기술 분석":
                                     st.info("특별한 기술적 시그널은 감지되지 않았습니다.")
 
                                 st.caption("⚠️ **주의:** 자동 해석은 참고용이며, 투자 결정은 종합 판단 하에 신중히 하세요.")
-                            else:
+else:
                                 st.warning("해석할 데이터가 없습니다.")
 
 
