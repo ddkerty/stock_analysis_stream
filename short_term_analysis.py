@@ -1,8 +1,7 @@
-# 필요한 파일 구조에 맞춰 피보나치 되돌림 기능을 단기 기술 분석용 모듈로 분리하고,
-# app.py에서 호출할 수 있도록 전체 코드를 구성하겠습니다.
+from pathlib import Path
 
-# 1. short_term_analysis.py (신규 모듈 생성용 코드)
-short_term_analysis_code = '''
+# 완전한 short_term_analysis.py 내용
+short_term_analysis_code = '''\
 import yfinance as yf
 import pandas as pd
 import plotly.graph_objects as go
@@ -76,38 +75,7 @@ def interpret_fibonacci(df, close_value=None):
     return f"📏 **현재가 (${close:.2f})는 Fib {closest_level} (${level_value:.2f}) 근처** → {explanation}"
 '''
 
-# 2. app.py 수정용 샘플 코드 (Fibonacci 탭 추가)
-app_code = '''
-import streamlit as st
-from short_term_analysis import download_price_data, plot_fibonacci_chart
-
-st.set_page_config(page_title="TechnutStock", layout="wide")
-
-st.title("📊 TechnutStock - 단기 기술 분석")
-
-with st.sidebar:
-    st.header("단기 기술 분석 설정")
-    ticker = st.text_input("종목 티커 입력", value="AAPL")
-    period = st.selectbox("조회 기간", ["5d", "1mo", "3mo"], index=1)
-    interval = st.selectbox("인터벌", ["1m", "5m", "15m", "1d"], index=3)
-
-tab1, tab2 = st.tabs(["📈 피보나치 되돌림", "🛠 향후 추가 기능"])
-
-with tab1:
-    st.subheader("📉 Fibonacci Retracement 차트")
-    if st.button("차트 분석 실행"):
-        df = download_price_data(ticker, period=period, interval=interval)
-        if df is not None and not df.empty:
-            fig = plot_fibonacci_chart(df)
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.warning("데이터를 불러오지 못했습니다.")
-with tab2:
-    st.info("VWAP, Bollinger Bands 등의 추가 기술 지표 분석 기능은 추후 업데이트 예정입니다.")
-'''
-
-# 저장
-from pathlib import Path
-
-#Path("/mnt/data/short_term_analysis.py").write_text(short_term_analysis_code, encoding='utf-8')
-#Path("/mnt/data/app_fibonacci.py").write_text(app_code, encoding='utf-8')
+# 파일로 저장
+file_path = Path("/mnt/data/short_term_analysis.py")
+file_path.write_text(short_term_analysis_code, encoding='utf-8')
+file_path
