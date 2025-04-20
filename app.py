@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# Combined app.py V1.9.1 - Debugging for Tech Analysis Tab, Full Logic Restored
+# Combined app.py V1.9.2 - Final Version with MultiIndex Handling Fix
 
 import streamlit as st
 import pandas as pd
@@ -20,13 +20,13 @@ except NameError: BASE_DIR = os.getcwd()
 
 # --- 기술 분석 함수 ---
 def calculate_vwap(df):
+    """VWAP 계산 (Volume 필요)"""
     df = df.copy()
     required_cols = ['High', 'Low', 'Close', 'Volume']
     missing_cols = [col for col in required_cols if col not in df.columns]
     if missing_cols: raise ValueError(f"VWAP 계산 실패: 컬럼 부족 ({missing_cols})")
     if df['Volume'].isnull().all() or df['Volume'].sum() == 0:
-        df['VWAP'] = np.nan
-        logging.warning(f"Ticker {df.attrs.get('ticker', '')}: VWAP 계산 불가 (거래량 부족/0)")
+        df['VWAP'] = np.nan; logging.warning(f"Ticker {df.attrs.get('ticker', '')}: VWAP 계산 불가 (거래량 부족/0)")
     else:
         df['Volume'].fillna(0, inplace=True); df['typical_price'] = (df['High'] + df['Low'] + df['Close']) / 3
         df['tp_volume'] = df['typical_price'] * df['Volume']; df['cumulative_volume'] = df['Volume'].cumsum()
@@ -35,6 +35,7 @@ def calculate_vwap(df):
     return df
 
 def calculate_bollinger_bands(df, window=20, num_std=2):
+    """볼린저 밴드 계산 (Close 필요)"""
     df = df.copy(); required_col = 'Close'
     if required_col not in df.columns or df[required_col].isnull().all(): raise ValueError(f"BB 계산 실패: 컬럼 '{required_col}' 없음/데이터 없음.")
     valid_close = df.dropna(subset=[required_col])
@@ -47,6 +48,7 @@ def calculate_bollinger_bands(df, window=20, num_std=2):
     return df
 
 def plot_technical_chart(df, ticker):
+    """기술적 분석 지표 통합 차트 생성"""
     fig = go.Figure(); required_candle_cols = ['Open', 'High', 'Low', 'Close']
     if not all(col in df.columns for col in required_candle_cols) or df[required_candle_cols].isnull().all(axis=None): st.error(f"캔들차트 필요 컬럼({required_candle_cols}) 없음/데이터 없음."); return fig
     fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name=f"{ticker} 캔들"))
@@ -70,12 +72,11 @@ def plot_technical_chart(df, ticker):
     return fig
 
 # --- Streamlit 페이지 설정 ---
-st.set_page_config(page_title="종합 주식 분석 V1.9.1 (Debug)", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="종합 주식 분석 V1.9.2", layout="wide", initial_sidebar_state="expanded") # 버전 업데이트
 
 # --- API 키 로드 ---
 NEWS_API_KEY = None; FRED_API_KEY = None; api_keys_loaded = False
 secrets_available = hasattr(st, 'secrets'); sidebar_status = st.sidebar.empty()
-# ... (API 키 로드 상세 로직) ...
 if secrets_available:
     try: NEWS_API_KEY = st.secrets.get("NEWS_API_KEY"); FRED_API_KEY = st.secrets.get("FRED_API_KEY");
     except Exception as e: sidebar_status.error(f"Secrets 로드 오류: {e}")
@@ -99,7 +100,7 @@ else: sidebar_status.success("API 키 로드 완료.")
 # --- 사이드바 설정 ---
 with st.sidebar:
     st.image("https://cdn-icons-png.flaticon.com/512/10071/10071119.png", width=80)
-    st.title("📊 분석 도구 V1.9.1")
+    st.title("📊 분석 도구 V1.9.2") # 버전 업데이트
     st.markdown("---")
     page = st.radio("분석 유형 선택", ["📊 종합 분석", "📈 기술 분석"], captions=["재무, 예측, 뉴스 등", "VWAP, BB, 피보나치 등"], key="page_selector")
     st.markdown("---")
@@ -182,7 +183,7 @@ if page == "📊 종합 분석":
                                          df_trend = pd.DataFrame(trend_data); df_trend['Date'] = pd.to_datetime(df_trend['Date']); df_trend.set_index('Date', inplace=True)
                                          if col_name in df_trend.columns:
                                              st.line_chart(df_trend[[col_name]]);
-                                             with st.expander("데이터 보기"): st.dataframe(df_trend[[col_name]].style.format({col_name: style_format}), use_container_width=True) # Expander 복원
+                                             with st.expander("데이터 보기"): st.dataframe(df_trend[[col_name]].style.format({col_name: style_format}), use_container_width=True)
                                          else: st.error(f"'{col_name}' 컬럼 없음.")
                                      except Exception as e: st.error(f"{title} 표시 오류: {e}")
                                  else: st.info(f"{title} 추세 데이터 없음.")
@@ -198,7 +199,7 @@ if page == "📊 종합 분석":
                             if isinstance(news_sentiment, list) and len(news_sentiment) > 0:
                                 st.info(news_sentiment[0])
                                 if len(news_sentiment) > 1:
-                                    with st.expander("뉴스 목록 보기"): [st.write(f"- {line}") for line in news_sentiment[1:]] # Expander 복원
+                                    with st.expander("뉴스 목록 보기"): [st.write(f"- {line}") for line in news_sentiment[1:]]
                             else: st.write(str(news_sentiment))
                         with col_fng:
                             st.markdown("**😨 공포-탐욕 지수**"); fng_index = results.get('fear_greed_index', "N/A")
@@ -244,10 +245,9 @@ if page == "📊 종합 분석":
                                          df_risk_periods = df_pred[df_pred['리스크 여부']];
                                          if not df_risk_periods.empty: fig_risk.add_trace(go.Scatter(x=df_risk_periods['ds'], y=df_risk_periods['yhat_lower'], mode='markers', marker_symbol='x', marker_color='red', name='Risk Day'))
                                          fig_risk.update_layout(hovermode="x unified"); st.plotly_chart(fig_risk, use_container_width=True)
-                                         if risk_days > 0: # 리스크 상세 데이터 Expander 복원
+                                         if risk_days > 0:
                                              with st.expander(f"리스크 예측일 상세 데이터 ({risk_days}일)"):
-                                                 df_risk_days_display = df_pred[df_pred['리스크 여부']].copy(); df_risk_days_display['ds'] = df_risk_days_display['ds'].dt.strftime('%Y-%m-%d')
-                                                 cols_show = ['ds', 'yhat_lower', '평단가', '예상 손실률'];
+                                                 df_risk_days_display = df_pred[df_pred['리스크 여부']].copy(); df_risk_days_display['ds'] = df_risk_days_display['ds'].dt.strftime('%Y-%m-%d'); cols_show = ['ds', 'yhat_lower', '평단가', '예상 손실률'];
                                                  if qty > 0: cols_show.append('예상 손실액')
                                                  st.dataframe(df_risk_days_display[cols_show].style.format({"yhat_lower":"{:.2f}", "평단가":"{:.2f}", "예상 손실률":"{:.2f}%", "예상 손실액":"${:,.2f}"}), use_container_width=True)
                                      else: st.info("예측 하한선 데이터 유효하지 않음.")
@@ -256,13 +256,13 @@ if page == "📊 종합 분석":
                         else: st.warning("예측 데이터 유효하지 않아 리스크 분석 불가."); st.divider()
                         # 8. 자동 분석 결과 요약
                         st.subheader("🧐 자동 분석 결과 요약 (참고용)"); summary_points = []
-                        # ... (V1.8 요약 로직 복원/유지) ...
+                        # ... (V1.9 요약 로직 복원/유지) ...
                         if isinstance(forecast_data_list, list) and len(forecast_data_list) > 0: # 예측
                             try: start_pred_row = forecast_data_list[0]; end_pred_row = forecast_data_list[-1]; start_pred = pd.to_numeric(start_pred_row.get('yhat'), 'coerce'); end_pred = pd.to_numeric(end_pred_row.get('yhat'), 'coerce'); lower = pd.to_numeric(end_pred_row.get('yhat_lower'), 'coerce'); upper = pd.to_numeric(end_pred_row.get('yhat_upper'), 'coerce');
-                            except: start_pred, end_pred, lower, upper = None, None, None, None # 안전 장치
+                            except: start_pred, end_pred, lower, upper = None, None, None, None
                             if pd.notna(start_pred) and pd.notna(end_pred): trend_obs = "상승" if end_pred > start_pred else "하락" if end_pred < start_pred else "횡보"; lower_str = f"${lower:.2f}" if pd.notna(lower) else 'N/A'; upper_str = f"${upper:.2f}" if pd.notna(upper) else 'N/A'; summary_points.append(f"- **예측:** 향후 {days}일간 **{trend_obs}** 추세 ({lower_str}~{upper_str}).")
                             else: summary_points.append("- 예측: 값 유효하지 않음.")
-                        news_res = results.get('news_sentiment'); fng_res = results.get('fear_greed_index') # 변수 할당
+                        news_res = results.get('news_sentiment'); fng_res = results.get('fear_greed_index')
                         if isinstance(news_res, list) and len(news_res) > 0 and ":" in news_res[0]: # 뉴스
                             try: score_part = news_res[0].split(":")[-1].strip(); avg_score = float(score_part); sentiment_desc = "긍정적" if avg_score > 0.05 else "부정적" if avg_score < -0.05 else "중립적"; summary_points.append(f"- **뉴스:** 평균 감성 {avg_score:.2f}, **{sentiment_desc}** 분위기.")
                             except Exception as e: logging.warning(f"뉴스 요약 오류: {e}"); summary_points.append("- 뉴스: 요약 오류.")
@@ -294,7 +294,8 @@ if page == "📊 종합 분석":
     else: # 버튼 클릭 전
         if comprehensive_analysis_possible: results_placeholder.info("⬅️ 사이드바 설정 후 '종합 분석 시작' 버튼 클릭.")
 
-# ============== 📈 기술 분석 탭 (Debug Code Added) ==============
+
+# ============== 📈 기술 분석 탭 (MultiIndex 처리 적용) ==============
 elif page == "📈 기술 분석":
     st.title("📈 기술적 분석 (VWAP + Bollinger + Fibonacci)")
     st.markdown("VWAP, 볼린저밴드, 피보나치 되돌림 수준을 함께 시각화합니다.")
@@ -334,50 +335,45 @@ elif page == "📈 기술 분석":
             if not df_tech.empty:
                 logging.info(f"다운로드 완료. 행: {len(df_tech)}")
                 st.caption(f"조회 기간: {df_tech.index.min():%Y-%m-%d %H:%M} ~ {df_tech.index.max():%Y-%m-%d %H:%M}")
+
+                # --- !!! 컬럼 멀티인덱스 처리 추가 !!! ---
+                if isinstance(df_tech.columns, pd.MultiIndex):
+                    logging.info("MultiIndex 컬럼 감지됨. Flattening 시도...")
+                    # st.caption("MultiIndex 컬럼 감지됨 -> 단순 컬럼으로 변환 중...") # 사용자에게 알림 (선택적)
+                    original_columns = df_tech.columns
+                    df_tech.columns = df_tech.columns.get_level_values(0) # 첫번째 레벨('Open', 'Close' 등)만 사용
+                    logging.info(f"컬럼 변환 완료: {original_columns.tolist()} -> {df_tech.columns.tolist()}")
+                    # 중복 컬럼 발생 시 첫번째 것만 유지 (예: Adj Close와 Close가 모두 Close로 변환될 때)
+                    df_tech = df_tech.loc[:,~df_tech.columns.duplicated()]
+                    logging.info(f"중복 제거 후 컬럼: {df_tech.columns.tolist()}")
+
+                # --- 필수 컬럼 사전 검증 ---
                 required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
                 missing_cols = [col for col in required_cols if col not in df_tech.columns]
                 if missing_cols:
                     st.error(f"❌ 데이터에 필수 컬럼 누락: {missing_cols}. 실제 컬럼: {df_tech.columns.tolist()}")
                     st.info("지수, 환율 등 일부 자산은 필요한 컬럼이 없을 수 있습니다.")
                     st.dataframe(df_tech.head())
-                    analysis_successful = False # 컬럼 없으면 실패
+                    analysis_successful = False
                 else:
-                    analysis_successful = True # 컬럼 있으면 성공
+                    analysis_successful = True
+
             elif analyze_button_tech: st.error(f"❌ 데이터 로드 실패.")
 
             # === 분석 성공 시에만 계산 및 차트 그리기 ===
             if analysis_successful:
                 with st.spinner("기술적 지표 계산 및 차트 생성 중..."):
                     try:
-                        # --- !!! 상세 디버깅 코드 추가 시작 !!! ---
-                        st.error("--- DEBUG INFO (V1.9.1) ---")
-                        st.write("dropna 호출 직전 df_tech.columns 객체:", df_tech.columns)
-                        st.write("dropna 호출 직전 df_tech.columns 리스트:", df_tech.columns.tolist())
-                        st.write("dropna 호출 직전 df_tech.columns 리스트 (repr):", [repr(col) for col in df_tech.columns.tolist()]) # 숨겨진 문자 확인
-                        st.write("dropna에 사용될 required_cols:", required_cols)
-                        st.write("df_tech.columns 타입:", type(df_tech.columns))
-                        st.write("required_cols 타입:", type(required_cols))
-                        st.write("--- 컬럼 개별 비교 ---")
-                        for req_col in required_cols:
-                            match_found = False
-                            for actual_col in df_tech.columns:
-                                req_col_stripped = req_col.strip(); actual_col_stripped = actual_col.strip()
-                                if req_col == actual_col: st.write(f"- '{req_col}' vs '{actual_col}': 정확히 일치!"); match_found = True; break
-                                elif req_col_stripped == actual_col_stripped: st.warning(f"- '{req_col}' vs '{actual_col}': 공백 제거 후 일치! (원본: {repr(actual_col)})"); match_found = True; break
-                                elif req_col.lower() == actual_col.lower(): st.warning(f"- '{req_col}' vs '{actual_col}': 대소문자 무시 후 일치! (원본: {repr(actual_col)})"); match_found = True; break
-                            if not match_found: st.error(f"- '{req_col}': 일치하는 컬럼 없음!")
-                        st.error("--- END DEBUG INFO ---")
-                        # --- !!! 상세 디버깅 코드 추가 끝 !!! ---
-
-                        # 데이터 정제 (KeyError 발생 지점)
-                        df_processed = df_tech.dropna(subset=required_cols).copy() # inplace=False, copy()
+                        # 데이터 정제 (이제 컬럼 이름이 단순 문자열이므로 안전)
+                        df_processed = df_tech.dropna(subset=required_cols).copy()
 
                         if df_processed.empty: st.warning("데이터 정제 후 남은 데이터가 없습니다.")
                         else:
-                            # 개별 지표 계산
-                            df_calculated = df_processed.copy() # 복사본으로 시작
+                            df_calculated = df_processed.copy()
+                            # VWAP 계산
                             try: df_calculated = calculate_vwap(df_calculated)
                             except ValueError as ve_vwap: st.warning(f"VWAP 계산 불가: {ve_vwap}")
+                            # Bollinger Bands 계산
                             try: df_calculated = calculate_bollinger_bands(df_calculated, window=bb_window_val, num_std=bb_std_val)
                             except ValueError as ve_bb: st.warning(f"볼린저 밴드 계산 불가: {ve_bb}")
 
@@ -393,19 +389,14 @@ elif page == "📈 기술 분석":
                             format_dict = {col: "{:.2f}" for col in display_cols if col != 'Volume'}
                             st.dataframe(df_calculated[display_cols].tail(10).style.format(format_dict), use_container_width=True)
 
-                    except KeyError as ke: # KeyError 명시적 처리
-                        st.error(f"!!! KeyError 발생 (디버깅 필요): {ke} !!!")
-                        logging.error(f"KeyError during technical analysis processing: {traceback.format_exc()}")
-                        st.info("앱 상단 DEBUG INFO의 컬럼 정보와 KeyError 메시지를 비교하여 원인을 확인해주세요.")
-                        st.dataframe(df_tech.head()) # 원본 데이터 표시
-                    except Exception as e:
+                    except Exception as e: # 계산/차트 생성 중 예상 못한 오류
                         st.error(f"기술적 분석 처리 중 예상치 못한 오류: {type(e).__name__} - {e}")
                         logging.error(f"Technical analysis processing error: {traceback.format_exc()}")
-                        st.dataframe(df_tech.head()) # 원본 데이터 표시
+                        st.dataframe(df_tech.head()) # 오류 시 원본 데이터 표시
 
     else: # 버튼 클릭 전
         st.info("종목 티커, 기간, 간격 설정 후 '기술적 분석 실행' 버튼 클릭.")
 
 # --- 앱 정보 ---
 st.sidebar.markdown("---")
-st.sidebar.info("종합 주식 분석 툴 V1.9.1 (Debug) | 정보 제공 목적")
+st.sidebar.info("종합 주식 분석 툴 V1.9.2 | 정보 제공 목적 (투자 조언 아님)")
