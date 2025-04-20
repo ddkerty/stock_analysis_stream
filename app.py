@@ -325,11 +325,13 @@ if page == "📊 종합 분석":
         if comprehensive_analysis_possible: results_placeholder.info("⬅️ 사이드바 설정 후 '종합 분석 시작' 버튼 클릭.")
 
 
-# ============== 📈 기술 분석 탭 (Error Handling 개선) ==============
+
+# ============== 📈 기술 분석 탭 (Error Handling 수정) ==============
 elif page == "📈 기술 분석":
     st.title("📈 기술적 분석 (VWAP + Bollinger + Fibonacci)")
     st.markdown("VWAP, 볼린저밴드, 피보나치 되돌림 수준을 함께 시각화합니다.")
     st.markdown("---")
+    # --- 입력 위젯들 (V1.9와 동일) ---
     ticker_tech = st.text_input("종목 티커", "AAPL", key="tech_ticker", help="해외(예: AAPL) 또는 국내(예: 005930.KS) 티커")
     today = datetime.now().date(); default_start_date = today - relativedelta(months=3)
     col1, col2, col3 = st.columns(3)
@@ -357,52 +359,42 @@ elif page == "📈 기술 분석":
                     elif interval in ['5m', '15m', '30m'] and period_days > 60: st.warning(f"{interval_display} 최대 60일 조회. 시작일 조정."); fetch_start_date = end_date - timedelta(days=60)
                     fetch_end_date = end_date + timedelta(days=1)
                     logging.info(f"yf 다운로드 요청: {ticker_processed_tech}, {fetch_start_date}, {fetch_end_date}, {interval}")
-                    # 티커 속성 추가 (로깅용)
                     df_tech = yf.download(ticker_processed_tech, start=fetch_start_date, end=fetch_end_date, interval=interval, progress=False)
-                    if not df_tech.empty: df_tech.attrs['ticker'] = ticker_processed_tech # 속성 추가
+                    if not df_tech.empty: df_tech.attrs['ticker'] = ticker_processed_tech
 
                 except Exception as yf_err: st.error(f"yfinance 다운로드 오류: {yf_err}")
 
-            # 데이터 로드 성공 및 유효성 검사
+            # --- 데이터 로드 성공 및 유효성 검사 ---
             if not df_tech.empty:
                 logging.info(f"다운로드 완료. 행: {len(df_tech)}")
                 st.caption(f"조회 기간: {df_tech.index.min():%Y-%m-%d %H:%M} ~ {df_tech.index.max():%Y-%m-%d %H:%M}")
 
-                # === 필수 컬럼 사전 검증 강화 ===
-                required_cols_candle = ['Open', 'High', 'Low', 'Close']
-                required_cols_volume = ['Volume'] # VWAP에 필요
-                all_required_cols = list(set(required_cols_candle + required_cols_volume)) # 중복 제거
+                # === 필수 컬럼 사전 검증 강화 (수정된 부분) ===
+                required_cols = ['Open', 'High', 'Low', 'Close', 'Volume'] # 지표 계산에 필요한 핵심 컬럼들
+                missing_cols = [col for col in required_cols if col not in df_tech.columns]
 
-                missing_cols = [col for col in all_required_cols if col not in df_tech.columns]
-
-                if missing_cols:
+                if missing_cols: # 필수 컬럼 중 하나라도 없으면, 여기서 중단!
                     st.error(f"❌ 데이터에 필수 컬럼 누락: {missing_cols}. 실제 컬럼: {df_tech.columns.tolist()}")
-                    st.info("지수, 환율 등 일부 자산 유형은 필요한 가격/거래량 데이터가 없을 수 있습니다.")
+                    st.info("지수, 환율 등 일부 자산 유형 또는 특정 기간 데이터에는 필요한 컬럼이 없을 수 있습니다.")
                     st.dataframe(df_tech.head())
+                    # st.stop() # 또는 여기서 실행을 멈추려면 이 코드를 사용
                 else:
-                    # 모든 필수 컬럼 존재 확인 후 분석 진행
+                    # === 모든 필수 컬럼 존재 시 분석 진행 ===
                     with st.spinner("기술적 지표 계산 및 차트 생성 중..."):
                         try:
-                            # 데이터 정제 (필수 컬럼 기준 NaN 제거)
-                            df_tech.dropna(subset=required_cols_candle, inplace=True) # 캔들 기준 NaN 우선 제거
-                            if df_tech.empty: st.warning("캔들 데이터 정제 후 남은 데이터 없음.")
-                            else:
-                                # --- 개별 지표 계산 (오류 발생해도 계속 진행 시도) ---
-                                # VWAP
-                                try:
-                                    df_tech = calculate_vwap(df_tech)
-                                except ValueError as ve_vwap:
-                                    st.warning(f"VWAP 계산 불가: {ve_vwap}")
-                                    if 'VWAP' in df_tech.columns: del df_tech['VWAP'] # 실패 시 컬럼 제거
+                            # 데이터 정제 (이제 KeyError 발생 안 함)
+                            df_tech.dropna(subset=required_cols, inplace=True)
 
+                            if df_tech.empty:
+                                st.warning("데이터 정제 후 남은 데이터가 없습니다.")
+                            else:
+                                # --- 개별 지표 계산 ---
+                                # VWAP
+                                try: df_tech = calculate_vwap(df_tech)
+                                except ValueError as ve_vwap: st.warning(f"VWAP 계산 불가: {ve_vwap}"); # ... 컬럼 삭제 로직 생략 가능
                                 # Bollinger Bands
-                                try:
-                                    df_tech = calculate_bollinger_bands(df_tech, window=bb_window_val, num_std=bb_std_val)
-                                except ValueError as ve_bb:
-                                    st.warning(f"볼린저 밴드 계산 불가: {ve_bb}")
-                                    if 'MA20' in df_tech.columns: del df_tech['MA20']
-                                    if 'Upper' in df_tech.columns: del df_tech['Upper']
-                                    if 'Lower' in df_tech.columns: del df_tech['Lower']
+                                try: df_tech = calculate_bollinger_bands(df_tech, window=bb_window_val, num_std=bb_std_val)
+                                except ValueError as ve_bb: st.warning(f"볼린저 밴드 계산 불가: {ve_bb}"); # ... 컬럼 삭제 로직 생략 가능
 
                                 # --- 차트 생성 및 표시 ---
                                 st.subheader(f"📌 {ticker_processed_tech} 기술적 분석 통합 차트 ({interval_display})")
@@ -419,14 +411,15 @@ elif page == "📈 기술 분석":
                         except Exception as e: # 계산/차트 생성 중 예상 못한 오류
                             st.error(f"기술적 분석 처리 중 예상치 못한 오류: {type(e).__name__} - {e}")
                             logging.error(f"Technical analysis processing error: {traceback.format_exc()}")
-                            st.dataframe(df_tech.tail(10), use_container_width=True) # 오류 시 가능한 데이터 표시
+                            # 오류 발생 시에도 다운로드된 원본 데이터의 끝부분을 보여주도록 수정
+                            st.dataframe(yf.download(ticker_processed_tech, start=fetch_start_date, end=fetch_end_date, interval=interval, progress=False).tail(10), use_container_width=True)
+
 
             elif analyze_button_tech: # 버튼 눌렀는데 df_tech가 비어있는 경우 (다운로드 실패 등)
                  st.error(f"❌ 데이터 로드 실패. 티커/기간/간격 확인 필요.")
 
     else: # 버튼 클릭 전
         st.info("종목 티커, 기간, 간격 설정 후 '기술적 분석 실행' 버튼 클릭.")
-
 
 # --- 앱 정보 ---
 st.sidebar.markdown("---")
