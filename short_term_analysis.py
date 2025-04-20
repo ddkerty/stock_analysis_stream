@@ -109,5 +109,5 @@ with tab2:
 # 저장
 from pathlib import Path
 
-Path("/mnt/data/short_term_analysis.py").write_text(short_term_analysis_code, encoding='utf-8')
-Path("/mnt/data/app_fibonacci.py").write_text(app_code, encoding='utf-8')
+#Path("/mnt/data/short_term_analysis.py").write_text(short_term_analysis_code, encoding='utf-8')
+#Path("/mnt/data/app_fibonacci.py").write_text(app_code, encoding='utf-8')
