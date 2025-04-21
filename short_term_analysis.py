@@ -53,3 +53,39 @@ def interpret_fibonacci(df: pd.DataFrame, close_value: float = None) -> str | No
 
     except Exception as e:
         return f"⚠️ 피보나치 해석 오류: {str(e)}"
+    
+# 추가 기능: RSI(Relative Strength Index) 계산
+def calculate_rsi(df, period: int = 14) -> pd.DataFrame:
+    """RSI(Relative Strength Index) 계산"""
+    df = df.copy()
+    if 'Close' not in df.columns:
+        raise ValueError("RSI 계산을 위해 'Close' 컬럼이 필요합니다.")
+    
+    delta = df['Close'].diff()
+    gain = delta.where(delta > 0, 0.0)
+    loss = -delta.where(delta < 0, 0.0)
+    avg_gain = gain.rolling(window=period, min_periods=period).mean()
+    avg_loss = loss.rolling(window=period, min_periods=period).mean()
+
+    rs = avg_gain / avg_loss
+    df['RSI'] = 100 - (100 / (1 + rs))
+
+    return df
+# 추가 기능: MACD(Moving Average Convergence Divergence) 계산
+def calculate_macd(df, fast=12, slow=26, signal=9):
+    """
+    MACD 및 Signal Line을 계산하고 DataFrame에 컬럼으로 추가합니다.
+    """
+    df = df.copy()
+    if 'Close' not in df.columns:
+        raise ValueError("MACD 계산에 'Close' 컬럼이 필요합니다.")
+    
+    df['EMA_fast'] = df['Close'].ewm(span=fast, adjust=False).mean()
+    df['EMA_slow'] = df['Close'].ewm(span=slow, adjust=False).mean()
+    df['MACD'] = df['EMA_fast'] - df['EMA_slow']
+    df['MACD_signal'] = df['MACD'].ewm(span=signal, adjust=False).mean()
+    df['MACD_hist'] = df['MACD'] - df['MACD_signal']
+    
+    return df
+
+
