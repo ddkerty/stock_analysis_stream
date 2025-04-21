@@ -10,14 +10,15 @@ def interpret_technical_signals(latest_row):
     """
     signal_messages = []
 
-    # VWAP 해석
+# VWAP 해석
     if 'VWAP' in latest_row and pd.notna(latest_row['VWAP']):
         if latest_row['Close'] > latest_row['VWAP']:
-            signal_messages.append("📈 **현재가 > VWAP:** 매수세 우위 가능성 또는 단기 강세 흐름")
+            signal_messages.append("📈 **현재가 > VWAP:** 단기 매수세 우위. *익절 고려 구간일 수 있습니다.*\n→ 특히 윗꼬리 음봉 + 거래량 감소 시 매도 검토")
         elif latest_row['Close'] < latest_row['VWAP']:
-            signal_messages.append("📉 **현재가 < VWAP:** 매도세 우위 가능성 또는 단기 약세 흐름")
+            signal_messages.append("📉 **현재가 < VWAP:** 단기 매도세 우위. *매수 진입 후보 구간일 수 있습니다.*\n→ 특히 하단 지지 + 거래량 증가 시 반등 기대 가능")
         else:
-            signal_messages.append("↔️ **현재가 = VWAP:** 수급 균형 상태 (단기 방향성 탐색 중)")
+            signal_messages.append("↔️ **현재가 = VWAP:** 중립 영역. 시장 방향 탐색 중일 수 있습니다.")
+
 
     # Bollinger Band 해석
     if 'Upper' in latest_row and 'Lower' in latest_row and pd.notna(latest_row['Upper']) and pd.notna(latest_row['Lower']):
