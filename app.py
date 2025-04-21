@@ -142,8 +142,8 @@ else:
 
 # --- 사이드바 설정 ---
 with st.sidebar:
-    st.image("https://cdn-icons-png.flaticon.com/512/10071/10071119.png", width=80)
-    st.title("📊 분석 도구 V1.9.6") # 버전 업데이트
+    #불필요 한 이미지 st.image("https://cdn-icons-png.flaticon.com/512/10071/10071119.png", width=80)
+    st.title("📊 주식 분석 도구 V1.9.6") # 버전 업데이트
     st.markdown("---")
     page = st.radio("분석 유형 선택", ["📊 종합 분석", "📈 기술 분석"], captions=["재무, 예측, 뉴스 등", "VWAP, BB, 피보나치 등"], key="page_selector")
     st.markdown("---")
