@@ -568,13 +568,16 @@ elif page == "📈 기술 분석":
 
                             # --- 자동 해석 기능 ---
                             st.divider()
-                            # --- 자동 해석 기능 ---
-                            st.divider()
                             st.subheader("🧠 기술적 시그널 해석 (참고용)")
 
                             if not df_calculated.empty:
                                 latest_row = df_calculated.iloc[-1]
-                                signal_messages = interpret_technical_signals(latest_row)  # 🔁 모듈 호출
+                                signal_messages = interpret_technical_signals(latest_row)  # 🔁 VWAP, BB 해석 불러오기
+
+                                # ✅ 피보나치 해석 추가
+                                fib_msg = interpret_fibonacci(df_calculated, close_value=latest_row["Close"])
+                                if fib_msg:
+                                    signal_messages.append(fib_msg)
 
                                 if signal_messages:
                                     for msg in signal_messages:
@@ -585,7 +588,6 @@ elif page == "📈 기술 분석":
                                 st.caption("⚠️ **주의:** 자동 해석은 참고용이며, 투자 결정은 종합 판단 하에 신중히 하세요.")
                             else:
                                 st.warning("해석할 데이터가 없습니다.")
-
 
                     except Exception as e: # 예상 못한 오류
                         st.error(f"기술적 분석 처리 중 오류: {type(e).__name__} - {e}")
