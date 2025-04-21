@@ -88,4 +88,30 @@ def calculate_macd(df, fast=12, slow=26, signal=9):
     
     return df
 
+def calculate_rsi(df, period=14):
+    delta = df['Close'].diff()
+    gain = np.where(delta > 0, delta, 0)
+    loss = np.where(delta < 0, -delta, 0)
+
+    avg_gain = pd.Series(gain).rolling(window=period).mean()
+    avg_loss = pd.Series(loss).rolling(window=period).mean()
+
+    rs = avg_gain / avg_loss
+    rsi = 100 - (100 / (1 + rs))
+    df['RSI'] = rsi
+    return df
+
+def calculate_macd(df, fast=12, slow=26, signal=9):
+    ema_fast = df['Close'].ewm(span=fast, adjust=False).mean()
+    ema_slow = df['Close'].ewm(span=slow, adjust=False).mean()
+    macd = ema_fast - ema_slow
+    macd_signal = macd.ewm(span=signal, adjust=False).mean()
+    macd_hist = macd - macd_signal
+
+    df['MACD'] = macd
+    df['MACD_signal'] = macd_signal
+    df['MACD_hist'] = macd_hist
+    return df
+
+
 

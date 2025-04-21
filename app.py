@@ -14,6 +14,7 @@ import logging
 import yfinance as yf
 from short_term_analysis import interpret_fibonacci
 from technical_interpret import interpret_technical_signals
+from short_term_analysis import calculate_rsi, calculate_macd
 
 
 # --- 기본 경로 설정 및 로깅 ---
@@ -555,6 +556,8 @@ elif page == "📈 기술 분석":
                             except ValueError as ve_vwap: st.warning(f"VWAP 계산 불가: {ve_vwap}")
                             try: df_calculated = calculate_bollinger_bands(df_calculated, window=bb_window_val, num_std=bb_std_val)
                             except ValueError as ve_bb: st.warning(f"볼린저 밴드 계산 불가: {ve_bb}")
+                            df_calculated = calculate_rsi(df_calculated)
+                            df_calculated = calculate_macd(df_calculated)
 
                             st.subheader(f"📌 {ticker_processed_tech} 기술적 분석 통합 차트 ({interval_display})")
                             chart_tech = plot_technical_chart(df_calculated, ticker_processed_tech)
