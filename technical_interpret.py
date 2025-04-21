@@ -2,6 +2,7 @@
 
 import numpy as np
 import pandas as pd
+from short_term_analysis import interpret_fibonacci
 
 def interpret_technical_signals(latest_row):
     """
@@ -41,3 +42,8 @@ def interpret_technical_signals(latest_row):
             signal_messages.append("✅ **밴드 폭 0:** 방향성 부족 또는 박스권 흐름")
 
     return signal_messages
+
+    # 피보나치 되돌림 해석
+    fib_msg = interpret_fibonacci(df_calculated, close_value=latest_row['Close'])
+    if fib_msg:
+        signal_messages.append(fib_msg)
