@@ -2,6 +2,8 @@
 # 📁 현재 기능: 피보나치 해석 interpret_fibonacci() 함수 1개
 
 import pandas as pd
+import numpy as np
+
 
 def interpret_fibonacci(df: pd.DataFrame, close_value: float = None) -> str | None:
     """
