@@ -62,40 +62,87 @@ def calculate_bollinger_bands(df, window=20, num_std=2):
     return df
 
 def plot_technical_chart(df, ticker):
-    """기술적 분석 지표 통합 차트 생성"""
+    """기술적 분석 지표 통합 차트 생성 (VWAP, Bollinger Band, Fibonacci, RSI, MACD 포함)"""
     fig = go.Figure()
     required_candle_cols = ['Open', 'High', 'Low', 'Close']
     if not all(col in df.columns for col in required_candle_cols) or df[required_candle_cols].isnull().all(axis=None):
         st.error(f"캔들차트 필요 컬럼({required_candle_cols}) 없음/데이터 없음.")
         return fig
-    fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name=f"{ticker} 캔들"))
+
+    # --- (1) 캔들 차트 ---
+    fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'],
+                                 low=df['Low'], close=df['Close'], name=f"{ticker} 캔들"))
+
+    # --- (2) VWAP ---
     if 'VWAP' in df.columns and df['VWAP'].notna().any():
-        fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], mode='lines', name='VWAP', line=dict(color='orange', width=1.5)))
+        fig.add_trace(go.Scatter(x=df.index, y=df['VWAP'], mode='lines',
+                                 name='VWAP', line=dict(color='orange', width=1.5)))
     elif 'VWAP' in df.columns:
         st.caption("VWAP 데이터 없음/표시 불가.")
+
+    # --- (3) Bollinger Bands ---
     if 'Upper' in df.columns and 'Lower' in df.columns and df['Upper'].notna().any():
         if 'MA20' in df.columns and df['MA20'].notna().any():
-            fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], mode='lines', name='MA20', line=dict(color='blue', width=1, dash='dash')))
-        fig.add_trace(go.Scatter(x=df.index, y=df['Upper'], mode='lines', name='Bollinger Upper', line=dict(color='grey', width=1)))
-        fig.add_trace(go.Scatter(x=df.index, y=df['Lower'], mode='lines', name='Bollinger Lower', line=dict(color='grey', width=1), fill='tonexty', fillcolor='rgba(180,180,180,0.1)'))
+            fig.add_trace(go.Scatter(x=df.index, y=df['MA20'], mode='lines', name='MA20',
+                                     line=dict(color='blue', width=1, dash='dash')))
+        fig.add_trace(go.Scatter(x=df.index, y=df['Upper'], mode='lines', name='Bollinger Upper',
+                                 line=dict(color='grey', width=1)))
+        fig.add_trace(go.Scatter(x=df.index, y=df['Lower'], mode='lines', name='Bollinger Lower',
+                                 line=dict(color='grey', width=1), fill='tonexty',
+                                 fillcolor='rgba(180,180,180,0.1)'))
     elif 'Upper' in df.columns:
         st.caption("볼린저 밴드 데이터 없음/표시 불가.")
+
+    # --- (4) Fibonacci Levels ---
     valid_price_df = df.dropna(subset=['High', 'Low'])
     if not valid_price_df.empty:
         min_price = valid_price_df['Low'].min()
         max_price = valid_price_df['High'].max()
         diff = max_price - min_price
         if diff > 0:
-            levels = {'0.0 (High)': max_price, '0.236': max_price - 0.236 * diff, '0.382': max_price - 0.382 * diff, '0.5': max_price - 0.5 * diff, '0.618': max_price - 0.618 * diff, '1.0 (Low)': min_price}
-            fib_colors = {'0.0 (High)': 'red', '0.236': 'orange', '0.382': 'gold', '0.5': 'green', '0.618': 'blue', '1.0 (Low)': 'purple'}
+            levels = {'0.0 (High)': max_price, '0.236': max_price - 0.236 * diff,
+                      '0.382': max_price - 0.382 * diff, '0.5': max_price - 0.5 * diff,
+                      '0.618': max_price - 0.618 * diff, '1.0 (Low)': min_price}
+            fib_colors = {'0.0 (High)': 'red', '0.236': 'orange', '0.382': 'gold',
+                          '0.5': 'green', '0.618': 'blue', '1.0 (Low)': 'purple'}
             for k, v in levels.items():
-                fig.add_hline(y=v, line_dash="dot", annotation_text=f"Fib {k}: ${v:.2f}", line_color=fib_colors.get(k,'navy'), annotation_position="bottom right", annotation_font_size=10)
+                fig.add_hline(y=v, line_dash="dot", annotation_text=f"Fib {k}: ${v:.2f}",
+                              line_color=fib_colors.get(k, 'navy'), annotation_position="bottom right",
+                              annotation_font_size=10)
         else:
             st.caption("기간 내 가격 변동 없어 피보나치 미표시.")
     else:
         st.caption("피보나치 레벨 계산 불가.")
-    fig.update_layout(title=f"{ticker} - 기술적 분석 통합 차트", xaxis_title="날짜 / 시간", yaxis_title="가격 ($)", xaxis_rangeslider_visible=False, legend_title_text="지표", hovermode="x unified", margin=dict(l=50, r=50, t=50, b=50))
+
+    # --- (5) RSI ---
+    if 'RSI' in df.columns and df['RSI'].notna().any():
+        fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], mode='lines', name='RSI (14)',
+                                 line=dict(color='purple', width=1), yaxis='y2'))
+
+    # --- (6) MACD ---
+    if 'MACD' in df.columns and 'MACD_signal' in df.columns:
+        fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], name='MACD', mode='lines',
+                                 line=dict(color='teal'), yaxis='y3'))
+        fig.add_trace(go.Scatter(x=df.index, y=df['MACD_signal'], name='MACD Signal', mode='lines',
+                                 line=dict(color='orange'), yaxis='y3'))
+        if 'MACD_hist' in df.columns:
+            fig.add_trace(go.Bar(x=df.index, y=df['MACD_hist'], name='MACD Histogram',
+                                 marker_color='lightblue', yaxis='y3'))
+
+    # --- 레이아웃 ---
+    fig.update_layout(
+        title=f"{ticker} - 기술적 분석 통합 차트",
+        xaxis_title="날짜 / 시간",
+        yaxis=dict(domain=[0.4, 1], title="가격 ($)"),
+        yaxis2=dict(domain=[0.25, 0.4], title="RSI", overlaying='y', side='right'),
+        yaxis3=dict(domain=[0.0, 0.25], title="MACD", overlaying='y', side='right'),
+        xaxis_rangeslider_visible=False,
+        legend_title_text="지표",
+        hovermode="x unified",
+        margin=dict(l=50, r=50, t=50, b=50)
+    )
     return fig
+
 
 # --- Streamlit 페이지 설정 ---
 st.set_page_config(page_title="종합 주식 분석 V1.9.6", layout="wide", initial_sidebar_state="expanded") # 버전 업데이트
