@@ -652,6 +652,10 @@ elif page == "📈 기술 분석":
 
 # --- 앱 정보 ---
 st.sidebar.markdown("---")
+
+with st.sidebar.expander("☕커피 한 잔 후원하기"):
+    st.image("qr_kakaopay.png", width=180)
+    st.caption("📱 카카오톡 실행 → 코드 스캔 후 후원할 수 있어요!")
 st.sidebar.info("종합 주식 분석 툴 V1.9.6 | 정보 제공 목적 (투자 조언 아님)") # 버전 정보 최종 업데이트
 st.sidebar.markdown("📌 [개발기 보러가기](https://technut.tistory.com/1)", unsafe_allow_html=True)
 st.sidebar.caption("👨‍💻 기술 기반 주식 분석 툴 개발기")
