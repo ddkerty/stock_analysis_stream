@@ -245,6 +245,13 @@ if page == "📊 종합 분석":
     # (V1.9.5와 동일한 로직 - 상세 결과 표시 포함)
     st.title("📊 종합 분석 결과")
     st.markdown("기업 정보, 재무 추세, 예측, 리스크 트래커 제공.")
+    st.markdown(
+    '<div style="background-color:#ffcc00;padding:10px;border-radius:6px;">'
+    '📘 <strong>주식 분석 툴 설명</strong>를 블로그에서 확인해보세요 → '
+    '<a href="https://technut.tistory.com/3" target="_blank" style="color:black;text-decoration:underline;">바로가기</a>'
+    '</div>',
+    unsafe_allow_html=True
+    )
     st.markdown("---")
     analyze_button_main_disabled = not comprehensive_analysis_possible
     if analyze_button_main_disabled: st.error("API 키 로드 실패. 종합 분석 불가.")
@@ -650,3 +657,5 @@ elif page == "📈 기술 분석":
 # --- 앱 정보 ---
 st.sidebar.markdown("---")
 st.sidebar.info("종합 주식 분석 툴 V1.9.6 | 정보 제공 목적 (투자 조언 아님)") # 버전 정보 최종 업데이트
+st.sidebar.markdown("📌 [개발기 보러가기](https://technut.tistory.com/1)", unsafe_allow_html=True)
+st.sidebar.caption("👨‍💻 기술 기반 주식 분석 툴 개발기")
