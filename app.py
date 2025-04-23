@@ -191,6 +191,7 @@ else:
 # --- 사이드바 설정 ---
 with st.sidebar:
     #불필요 한 이미지 st.image("https://cdn-icons-png.flaticon.com/512/10071/10071119.png", width=80)
+    st.markdown("📘 [도구 상세정보](https://technut.tistory.com/3)", unsafe_allow_html=True)
     st.title("📊 주식 분석 도구 V1.9.6") # 버전 업데이트
     st.markdown("---")
     page = st.radio("분석 유형 선택", ["📊 종합 분석", "📈 기술 분석"], captions=["재무, 예측, 뉴스 등", "VWAP, BB, 피보나치 등"], key="page_selector")
@@ -245,13 +246,6 @@ if page == "📊 종합 분석":
     # (V1.9.5와 동일한 로직 - 상세 결과 표시 포함)
     st.title("📊 종합 분석 결과")
     st.markdown("기업 정보, 재무 추세, 예측, 리스크 트래커 제공.")
-    st.markdown(
-    '<div style="background-color:#ffcc00;padding:10px;border-radius:6px;">'
-    '📘 <strong>주식 분석 툴 설명</strong>를 블로그에서 확인해보세요 → '
-    '<a href="https://technut.tistory.com/3" target="_blank" style="color:black;text-decoration:underline;">바로가기</a>'
-    '</div>',
-    unsafe_allow_html=True
-    )
     st.markdown("---")
     analyze_button_main_disabled = not comprehensive_analysis_possible
     if analyze_button_main_disabled: st.error("API 키 로드 실패. 종합 분석 불가.")
