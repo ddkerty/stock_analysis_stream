@@ -197,7 +197,9 @@ with st.sidebar:
         st.caption("📱 코드 스캔으로 후원할 수 있습니다")
         st.caption("🙏 따뜻한 후원 감사합니다 :)")
     st.markdown("📘 [분석도구 상세정보](https://technut.tistory.com/3)", unsafe_allow_html=True)
-    #st.markdown("설명서 (업데이트 예정)") # 버전 업데이트
+        # 📘 설명서 링크 추가
+    st.markdown("📘 [분석도구 사용 설명서 보기](https://technut.tistory.com/category/%EC%99%84%EC%84%B1%EB%90%9C%20%ED%94%84%EB%A1%9C%EC%A0%9D%ED%8A%B8/%EC%A3%BC%EC%8B%9D%20%EB%B6%84%EC%84%9D%20%ED%88%B4%20%EC%84%A4%EB%AA%85%EC%84%9C)", unsafe_allow_html=True)
+    st.caption("🧾 기능별 설명과 사용법을 블로그에서 확인할 수 있어요!")
     st.title("📊 주식 분석 도구 V1.9.6") # 버전 업데이트
     st.markdown("---")
     page = st.radio("분석 유형 선택", ["📊 종합 분석", "📈 기술 분석"], captions=["재무, 예측, 뉴스 등", "VWAP, BB, 피보나치 등"], key="page_selector")
