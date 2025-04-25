@@ -272,7 +272,7 @@ if page == "📊 종합 분석":
             ticker_proc = ticker.strip().upper()
             with st.spinner(f"{ticker_proc} 종합 분석 중..."):
                 try:
-                    results = run_cached_analysis(ticker_proc, NEWS_API_KEY, FRED_API_KEY, years, days, periods, cp_prior)
+                    results = run_cached_analysis(ticker_proc, "", FRED_API_KEY, years, days, periods, cp_prior)
                     results_placeholder.empty()
                     if results and isinstance(results, dict) and "error" not in results:
                         # === 상세 결과 표시 (V1.9.5 내용 유지, 재무추세 부분 가독성 수정) ===
@@ -346,19 +346,19 @@ if page == "📊 종합 분석":
                             st.warning("주가 차트 생성 실패 (종합).")
                             st.divider()
                         # 5. 시장 심리 분석
-                        st.subheader("시장 심리 분석")
-                        col_news, col_fng = st.columns([2, 1])
-                        with col_news:
-                            st.markdown("**📰 뉴스 감정 분석**")
-                            news_sentiment = results.get('news_sentiment', ["정보 없음."])
-                            if isinstance(news_sentiment, list) and len(news_sentiment) > 0:
-                                st.info(news_sentiment[0])
-                                if len(news_sentiment) > 1:
-                                    with st.expander("뉴스 목록 보기"): # for 루프 사용 (V1.9.6 변경점)
-                                        for line in news_sentiment[1:]:
-                                            st.write(f"- {line}")
-                            else:
-                                st.write(str(news_sentiment))
+                        #st.subheader("시장 심리 분석")
+                        #col_news, col_fng = st.columns([2, 1])
+                        #with col_news:
+                            #st.markdown("**📰 뉴스 감정 분석**")
+                            #news_sentiment = results.get('news_sentiment', ["정보 없음."])
+                            #if isinstance(news_sentiment, list) and len(news_sentiment) > 0:
+                                #st.info(news_sentiment[0])
+                                #if len(news_sentiment) > 1:
+                                    #with st.expander("뉴스 목록 보기"): # for 루프 사용 (V1.9.6 변경점)
+                                        #for line in news_sentiment[1:]:
+                                            #st.write(f"- {line}")
+                            #else:
+                                #st.write(str(news_sentiment))
                         with col_fng:
                             st.markdown("**😨 공포-탐욕 지수**")
                             fng_index = results.get('fear_greed_index', "N/A")
@@ -477,17 +477,17 @@ if page == "📊 종합 분석":
                                 upper_str = f"${upper:.2f}" if pd.notna(upper) else 'N/A'
                                 summary_points.append(f"- **예측:** 향후 {days}일간 **{trend_obs}** 추세 ({lower_str}~{upper_str}).")
                             else: summary_points.append("- 예측: 값 유효하지 않음.")
-                        news_res = results.get('news_sentiment')
+                        #news_res = results.get('news_sentiment')
                         fng_res = results.get('fear_greed_index')
-                        if isinstance(news_res, list) and len(news_res) > 0 and ":" in news_res[0]: # 뉴스
-                            try:
-                                score_part = news_res[0].split(":")[-1].strip()
-                                avg_score = float(score_part)
-                                sentiment_desc = "긍정적" if avg_score > 0.05 else "부정적" if avg_score < -0.05 else "중립적"
-                                summary_points.append(f"- **뉴스:** 평균 감성 {avg_score:.2f}, **{sentiment_desc}** 분위기.")
-                            except Exception as e:
-                                logging.warning(f"뉴스 요약 오류: {e}")
-                                summary_points.append("- 뉴스: 요약 오류.")
+                        #if isinstance(news_res, list) and len(news_res) > 0 and ":" in news_res[0]: # 뉴스
+                            #try:
+                                #score_part = news_res[0].split(":")[-1].strip()
+                                #avg_score = float(score_part)
+                                #sentiment_desc = "긍정적" if avg_score > 0.05 else "부정적" if avg_score < -0.05 else "중립적"
+                                #summary_points.append(f"- **뉴스:** 평균 감성 {avg_score:.2f}, **{sentiment_desc}** 분위기.")
+                            #except Exception as e:
+                                #logging.warning(f"뉴스 요약 오류: {e}")
+                                #summary_points.append("- 뉴스: 요약 오류.")
                         if isinstance(fng_res, dict):
                             summary_points.append(f"- **시장 심리:** 공포-탐욕 {fng_res.get('value', 'N/A')} (**{fng_res.get('classification', 'N/A')}**).")
                         if fundamentals and isinstance(fundamentals, dict): # 기본 정보
