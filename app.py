@@ -359,8 +359,8 @@ if page == "📊 종합 분석":
                                             #st.write(f"- {line}")
                             #else:
                                 #st.write(str(news_sentiment))
-                        with col_fng:
-                            st.markdown("**😨 공포-탐욕 지수**")
+                        #with col_fng:
+                            #st.markdown("**😨 공포-탐욕 지수**")
                             fng_index = results.get('fear_greed_index', "N/A")
                             if isinstance(fng_index, dict):
                                 st.metric("현재 지수", fng_index.get('value', 'N/A'), fng_index.get('classification', ''))
