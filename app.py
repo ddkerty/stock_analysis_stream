@@ -194,7 +194,7 @@ with st.sidebar:
         # 🔗 강조 스타일 블로그 링크
     with st.sidebar.expander("☕커피 한 잔 후원하기"):
         st.image("qr_kakaopay.png", width=180)
-        st.caption("📱 https://qr.kakaopay.com/Ej9TERfnh")
+        st.caption("📱모바일링크: https://qr.kakaopay.com/Ej9TERfnh")
         st.caption("🙏 따뜻한 후원 감사합니다 :)")
     st.markdown("📘 [분석도구 상세정보](https://technut.tistory.com/3)", unsafe_allow_html=True)
         # 📘 설명서 링크 추가
