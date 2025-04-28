@@ -145,7 +145,7 @@ def plot_technical_chart(df, ticker):
 
 
 # --- Streamlit 페이지 설정 ---
-st.set_page_config(page_title="종합 주식 분석 V1.9.6", layout="wide", initial_sidebar_state="expanded") # 버전 업데이트
+st.set_page_config(page_title="종합 주식 분석 V1.9.7", layout="wide", initial_sidebar_state="expanded") # 버전 업데이트
 
 # --- API 키 로드 ---
 NEWS_API_KEY = None
