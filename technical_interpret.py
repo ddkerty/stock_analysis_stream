@@ -65,12 +65,14 @@ def interpret_technical_signals(row, df_context=None):
             signals.append("⚪️ **MACD 신호선 수렴:** 방향성 모호, 추세 전환 전 조정 구간일 수 있음")
 
     # 📊 피보나치 되돌림 해석
-    if df_context is not None:
-        try:
-            fib_msg = interpret_fibonacci(df_context, close_value=row['Close'])
-            if fib_msg:
-                signals.append(fib_msg)
-        except Exception as e:
-            signals.append("⚠️ 피보나치 해석 실패")
+    if df_context is not None and len(df_context) >= 2:
+        fib_msg = interpret_fibonacci(
+            df_context,
+            close_value=row['Close'],
+            prev_close=df_context['Close'].iloc[-2]  # 직전 봉
+        )
+        if fib_msg:
+            signals.append(fib_msg)
+
 
     return signals

@@ -5,56 +5,74 @@ import pandas as pd
 import numpy as np
 
 
-def interpret_fibonacci(df: pd.DataFrame, close_value: float = None) -> str | None:
+def interpret_fibonacci(df: pd.DataFrame,
+                        close_value: float | None = None,
+                        prev_close: float | None = None) -> str | None:
     """
-    피보나치 되돌림 수준을 기반으로 현재가가 주요 레벨 근처에 위치하는지 자동 해석합니다.
-    :param df: 고가, 저가를 포함한 데이터프레임
-    :param close_value: 현재 종가 또는 분석 기준 가격
-    :return: 시그널 메시지 (또는 None)
+    피보나치 되돌림 수준별 시나리오·전략 제안 포함 해석
+    - prev_close: 직전 봉 종가(있으면 ‘돌파/이탈’ 판단)
     """
     if df.empty or close_value is None:
         return None
 
     try:
-        min_price = df['Low'].min()
-        max_price = df['High'].max()
-        diff = max_price - min_price
-
+        low, high = df['Low'].min(), df['High'].max()
+        diff = high - low
         if diff <= 0:
-            return "피보나치 분석 불가 (고가/저가 차이 없음)"
+            return "피보나치 분석 불가 (고가·저가 차이 없음)"
 
+        # 레벨 값 계산
         levels = {
-            '0.0 (High)': max_price,
-            '0.236': max_price - 0.236 * diff,
-            '0.382': max_price - 0.382 * diff,
-            '0.5': max_price - 0.5 * diff,
-            '0.618': max_price - 0.618 * diff,
-            '1.0 (Low)': min_price
+            0.0:  high,
+            0.236: high - 0.236 * diff,
+            0.382: high - 0.382 * diff,
+            0.5:   high - 0.5   * diff,
+            0.618: high - 0.618 * diff,
+            1.0:  low,
         }
 
-        message = ""
-        for key, value in levels.items():
-            if abs(close_value - value) / diff < 0.02:  # 2% 이내 근접한 레벨 찾기
-                message = f"🔍 **현재가가 피보나치 {key} 레벨 ({value:.2f})에 근접해 있습니다.**\n"
-                # 설명 추가
-                if key == "0.382":
-                    message += "→ 일반적으로 **조정 후 지지 가능성**이 있는 구간입니다."
-                elif key == "0.5":
-                    message += "→ **중립적 전환점**으로 여겨지며 반등/하락 양쪽 가능성을 염두에 둬야 합니다."
-                elif key == "0.618":
-                    message += "→ 기술적으로 **되돌림의 마지막 지지선**으로 평가되며, 반등 기대 심리가 커질 수 있습니다."
-                elif key == "0.236":
-                    message += "→ 아직 **얕은 되돌림**으로 강한 추세가 지속될 수도 있습니다."
-                elif key == "1.0":
-                    message += "→ **최저점 테스트** 구간으로 하방 돌파 시 하락 추세 강화 우려."
-                elif key == "0.0":
-                    message += "→ **고점 근처**로 조정 가능성도 염두."
-                break
+        # 가까운 레벨 찾기 (±1.5 % 이내)
+        nearest = min(levels.items(),
+                      key=lambda kv: abs(close_value - kv[1]))
+        ratio, lvl_price = nearest
+        if abs(close_value - lvl_price) / diff > 0.015:
+            return "현재가는 주요 피보나치 레벨에서 멀리 떨어져 있어요."
 
-        return message or "피보나치 주요 레벨 근처에 현재가가 위치해 있지 않습니다."
+        # 레벨별 시나리오/전략
+        comments = {
+            0.236: ("얕은 되돌림 후 강세 재개 가능성이 커 보입니다.",
+                    "전 고점 돌파 시 추세추종 매수 고려"),
+            0.382: ("첫 번째 핵심 지지선입니다.",
+                    "하향 돌파 시 0.5까지 눌림 가능성을 염두에 두세요."),
+            0.5:   ("추세가 중립으로 전환되는 분기점이에요.",
+                    "방향 확인 전까지 관망 또는 포지션 축소가 안전합니다."),
+            0.618: ("되돌림의 마지막 보루로 평가됩니다.",
+                    "반등 캔들 + 거래량 증가 시 진입, 반대로 종가 이탈 시 손절 고려"),
+            1.0:   ("저점을 다시 시험 중입니다.",
+                    "지지 실패 시 하락 추세 강화, 성공 시 쌍바닥 반등 시도 가능"),
+            0.0:   ("고점 부근이며 차익 실현 압력이 커질 수 있어요.",
+                    "음봉 전환·거래량 감소 확인 시 익절 분할 매도 고려"),
+        }
+
+        # 이전 봉 대비 돌파/이탈 감지
+        breach_msg = ""
+        if prev_close is not None:
+            if prev_close < lvl_price <= close_value:
+                breach_msg = "▶ **상향 돌파** 신호가 나왔습니다."
+            elif prev_close > lvl_price >= close_value:
+                breach_msg = "▶ **하향 이탈** 신호가 나왔습니다."
+
+        headline = (f"🔍 **현재가가 피보나치 {ratio:.3f}"
+                    f" 레벨({lvl_price:.2f}$) 근처입니다.**")
+        body, strategy = comments.get(ratio, ("", ""))
+        msg = f"{headline}\n- {body}\n- {strategy}"
+        if breach_msg:
+            msg += f"\n{breach_msg}"
+        return msg
 
     except Exception as e:
-        return f"⚠️ 피보나치 해석 오류: {str(e)}"
+        return f"⚠️ 피보나치 해석 오류: {e}"
+
     
 # 추가 기능: RSI(Relative Strength Index) 계산
 def calculate_rsi(df, period: int = 14) -> pd.DataFrame:
