@@ -460,25 +460,41 @@ if page == "📊 종합 분석":
                         # 8. 자동 분석 결과 요약
                         st.subheader("🧐 자동 분석 결과 요약 (참고용)")
                         summary_points = []
-                        # (V1.9.5 요약 로직)
-                        if isinstance(forecast_data_list, list) and len(forecast_data_list) > 0: # 예측
+
+                        if isinstance(forecast_data_list, list) and len(forecast_data_list) > 0:
                             try:
-                                start_pred_row = forecast_data_list[0]
-                                end_pred_row = forecast_data_list[-1]
-                                start_pred = pd.to_numeric(start_pred_row.get('yhat'), 'coerce')
-                                end_pred = pd.to_numeric(end_pred_row.get('yhat'), 'coerce')
-                                lower = pd.to_numeric(end_pred_row.get('yhat_lower'), 'coerce')
-                                upper = pd.to_numeric(end_pred_row.get('yhat_upper'), 'coerce')
-                            except:
-                                start_pred, end_pred, lower, upper = None, None, None, None
-                            if pd.notna(start_pred) and pd.notna(end_pred):
-                                trend_obs = "상승" if end_pred > start_pred else "하락" if end_pred < start_pred else "횡보"
-                                lower_str = f"${lower:.2f}" if pd.notna(lower) else 'N/A'
-                                upper_str = f"${upper:.2f}" if pd.notna(upper) else 'N/A'
-                                summary_points.append(f"- **예측:** 향후 {days}일간 **{trend_obs}** 추세 ({lower_str}~{upper_str}).")
-                            else: summary_points.append("- 예측: 값 유효하지 않음.")
-                        #news_res = results.get('news_sentiment')
-                        fng_res = results.get('fear_greed_index')
+                                df_pred = pd.DataFrame(forecast_data_list).sort_values("ds")
+                                start_pred = df_pred["yhat"].iloc[0]
+                                end_pred   = df_pred["yhat"].iloc[-1]
+
+                                trend_obs = (
+                                    "상승" if end_pred > start_pred * 1.02 else
+                                    "하락" if end_pred < start_pred * 0.98 else
+                                    "횡보"
+                                )
+
+                                lower = df_pred["yhat_lower"].min()
+                                upper = df_pred["yhat_upper"].max()
+
+                                summary_points.append(
+                                    f"- **예측:** 향후 {days}일간 **{trend_obs}** 추세 "
+                                    f"(${lower:.2f} ~ ${upper:.2f})"
+                                )
+                            except Exception as e:
+                                logging.warning(f"예측 요약 생성 오류: {e}")
+                                summary_points.append("- 예측: 요약 생성 오류")
+
+                        # 이후에 뉴스·F&G 요약 추가
+                        news_res = results.get('news_sentiment')
+                        fng_res  = results.get('fear_greed_index')
+                        # …(news_res, fng_res 처리 로직)…
+
+                        # 최종적으로
+                        if summary_points:
+                            st.markdown("\n".join(summary_points))
+                        else:
+                            st.write("분석 요약 생성 불가.")
+
                         #if isinstance(news_res, list) and len(news_res) > 0 and ":" in news_res[0]: # 뉴스
                             #try:
                                 #score_part = news_res[0].split(":")[-1].strip()
