@@ -692,8 +692,10 @@ def run_prophet_forecast(ticker, start_date, end_date=None, forecast_days=30, fr
                 logging.info(f"Prophet CV 시작 (initial='{initial_cv}', period='{period_cv}', horizon='{horizon_cv}')...")
                 df_cv = cross_validation(m, initial=initial_cv, period=period_cv, horizon=horizon_cv, parallel=None)
                 logging.info("CV 완료.")
+                # CV 결과로 MAPE 계산
                 df_p = performance_metrics(df_cv)
-                logging.info(f"Prophet CV 성능 지표:\n{df_p.head().to_string()}")
+                mape = df_p["mape"].mean() * 100  # % 단위로 변환
+                logging.info(f"Prophet CV 평균 MAPE: {mape:.2f}%")
                 # CV 결과 시각화 및 저장
                 fig_cv = plot_cross_validation_metric(df_cv, metric='mape')
                 plt.title(f'{ticker} CV MAPE (Params: cp={changepoint_prior_scale})')
@@ -741,7 +743,7 @@ def run_prophet_forecast(ticker, start_date, end_date=None, forecast_days=30, fr
         forecast_dict = forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(forecast_days).to_dict('records')
         for rec in forecast_dict: rec['ds'] = rec['ds'].strftime('%Y-%m-%d')
 
-        return forecast_dict, fig_fcst, cv_path
+        return forecast_dict, fig_fcst, cv_path, mape
     except Exception as e:
         logging.error(f"Prophet 학습/예측 단계에서 오류 발생: {e}")
         logging.error(traceback.format_exc())
@@ -799,10 +801,14 @@ def analyze_stock(ticker, news_key, fred_key, analysis_period_years=2, forecast_
             changepoint_prior_scale=changepoint_prior_scale # 인자 전달
         )
         # 결과 처리
-        if forecast_result and isinstance(forecast_result, tuple) and len(forecast_result) == 3:
-            output_results['prophet_forecast'] = forecast_result[0] or "예측 실패"
-            output_results['forecast_fig'] = forecast_result[1]
-            output_results['cv_plot_path'] = forecast_result[2]
+        if forecast_result and isinstance(forecast_result, tuple) and len(forecast_result) == 4:
+            fc_list, fc_fig, cv_path, mape = forecast_result
+            output_results['prophet_forecast'] = fc_list    or "예측 실패"
+            output_results['forecast_fig']    = fc_fig
+            output_results['cv_plot_path']    = cv_path
+            # MAPE 경고 플래그
+            output_results['mape']            = mape
+            output_results['warn_high_mape']  = (mape > 20)
         else:
             output_results['prophet_forecast'] = "예측 실행 오류"
             output_results['forecast_fig'] = None
