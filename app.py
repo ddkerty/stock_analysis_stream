@@ -26,7 +26,7 @@ import time as time_module # time import 충돌 방지
 
 # --- Streamlit 페이지 설정 (가장 먼저 호출되어야 함) ---
 # 버전 업데이트 주석은 여기서도 유효
-st.set_page_config(page_title="종합 주식 분석 Finnhub 개인버전", layout="wide", initial_sidebar_state="expanded")
+#st.set_page_config(page_title="종합 주식 분석 Finnhub 개인버전", layout="wide", initial_sidebar_state="expanded")
 
 # 기존 모듈 임포트
 try:
