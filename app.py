@@ -2,6 +2,11 @@
 # Combined app.py V1.9.8 (Modified for Finnhub in Technical Analysis Tab)
 
 import streamlit as st # Streamlit import가 가장 먼저 오는 것이 일반적
+st.set_page_config(
+    page_title="종합 주식 분석 Finnhub 개인버전",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
 import pandas as pd
 from datetime import datetime, timedelta, time
 from dateutil.relativedelta import relativedelta
@@ -260,9 +265,6 @@ def plot_technical_chart(df, ticker):
         margin=dict(l=50, r=50, t=50, b=50)
     )
     return fig
-
-# --- Streamlit 페이지 설정 ---
-st.set_page_config(page_title="종합 주식 분석 Finnhub 개인버전", layout="wide", initial_sidebar_state="expanded") # 버전 업데이트
 
 # --- API 키 로드 (News, FRED - 종합 분석용) ---
 NEWS_API_KEY = None
