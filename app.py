@@ -277,11 +277,11 @@ with st.sidebar:
         st.caption(f"현재 설정: {bb_window}일 기간, {bb_std:.1f} 표준편차")
         st.divider()
 
-# --- 캐시된 종합 분석 함수 ---
+ #--- 캐시된 종합 분석 함수 ---
 @st.cache_data(ttl=timedelta(hours=1))
 def run_cached_analysis(
     ticker_sa: str,
-    _finnhub_client_sa,       # 언더스코어 붙인 인자
+    _finnhub_client_sa,       # ← 여기만 존재
     fred_api_key_sa: str,
     years_sa: int,
     days_sa: int,
