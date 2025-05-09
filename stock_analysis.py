@@ -1,17 +1,17 @@
-# stock_analysis.py (changepoint_prior_scale 파라미터 추가 - 오류 수정 최종본)
+# stock_analysis.py (Finnhub API 적용 및 레이트 리미터 추가)
 
 import os
 import logging
 import pandas as pd
 import numpy as np
-import yfinance as yf
+# import yfinance as yf # yfinance 의존성 제거 시도
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from textblob import TextBlob
-import requests
+# from textblob import TextBlob # Finnhub 뉴스 감정 분석 사용 시 불필요
+import requests # FRED API 등 일부 HTTP 요청에 필요
 from prophet import Prophet
 from prophet.plot import plot_plotly
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time as dt_time # dt_time 추가
 from dateutil.relativedelta import relativedelta
 from dotenv import load_dotenv
 from fredapi import Fred
@@ -20,15 +20,21 @@ from prophet.diagnostics import cross_validation, performance_metrics
 from prophet.plot import plot_cross_validation_metric
 import matplotlib.pyplot as plt
 import warnings
-import locale
+# import locale # 현재 직접 사용되지 않음
 import re
 import pandas_ta as ta
+
+# Finnhub 및 레이트 리미터 관련 import
+import finnhub
+from ratelimit import limits, RateLimitException
+from backoff import on_exception, expo
+import time as time_module # time import 충돌 방지
 
 # 경고 메시지 및 로깅 설정
 warnings.simplefilter(action='ignore', category=FutureWarning)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-# --- 경로 및 API 키 설정 ---
+# --- 경로 설정 ---
 try:
     BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 except NameError:
@@ -39,26 +45,103 @@ CHARTS_FOLDER = os.path.join(BASE_DIR, "charts")
 DATA_FOLDER = os.path.join(BASE_DIR, "data")
 FORECAST_FOLDER = os.path.join(BASE_DIR, "forecast")
 
-try:
-    dotenv_path = os.path.join(BASE_DIR, '.env')
-    if os.path.exists(dotenv_path):
-        load_dotenv(dotenv_path=dotenv_path)
-        logging.info(f".env 로드 성공: {dotenv_path}")
-    else:
-        logging.info(f".env 파일 없음 (정상일 수 있음): {dotenv_path}")
-except Exception as e:
-    logging.error(f".env 로드 오류: {e}")
-
-NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+# --- API 키 및 클라이언트 관리 ---
+# 이 모듈이 app.py와 독립적으로 실행될 수도 있으므로, 자체적으로 키 로드 및 클라이언트 초기화 로직을 가짐
+# app.py에서 client를 전달받는 형태로 변경하는 것이 더 좋을 수 있음
+FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY")
+NEWS_API_KEY_ORIGINAL = os.getenv("NEWS_API_KEY") # Finnhub News 사용 시 이 키는 불필요할 수 있음
 FRED_API_KEY = os.getenv("FRED_API_KEY")
+finnhub_client_stock_analysis = None
 
-if not NEWS_API_KEY: logging.warning("NEWS_API_KEY 없음.")
-if not FRED_API_KEY: logging.warning("FRED_API_KEY 없음.")
-if NEWS_API_KEY and FRED_API_KEY: logging.info("API 키 로드 시도 완료.")
+if not FINNHUB_API_KEY:
+    logging.warning("stock_analysis.py: Finnhub API 키가 환경 변수에 없습니다.")
+if not FRED_API_KEY:
+    logging.warning("stock_analysis.py: FRED API 키가 환경 변수에 없습니다.")
 
-# --- 데이터 가져오기 함수들 ---
+def initialize_finnhub_client():
+    global finnhub_client_stock_analysis, FINNHUB_API_KEY
+    if finnhub_client_stock_analysis is None and FINNHUB_API_KEY:
+        finnhub_client_stock_analysis = finnhub.Client(api_key=FINNHUB_API_KEY)
+        logging.info("stock_analysis.py: Finnhub 클라이언트 초기화 완료.")
+    elif not FINNHUB_API_KEY:
+        logging.error("stock_analysis.py: Finnhub API 키가 없어 클라이언트를 초기화할 수 없습니다.")
+    return finnhub_client_stock_analysis
+
+# 레이트 리미터 설정 (app.py와 동일하게)
+CALLS = 55
+PERIOD = 60
+
+@on_exception(expo, RateLimitException, max_tries=3, logger=logging)
+@limits(calls=CALLS, period=PERIOD)
+def call_finnhub_api_with_limit_sa(api_function, *args, **kwargs):
+    """stock_analysis용 레이트 리밋 적용 Finnhub API 호출 함수"""
+    try:
+        # logging.info(f"SA - Calling Finnhub API (rate-limited): {api_function.__name__}")
+        return api_function(*args, **kwargs)
+    except RateLimitException as rle:
+        logging.warning(f"SA - Rate limit exceeded for {api_function.__name__}. Retrying... Details: {rle}")
+        raise
+    except finnhub.FinnhubAPIException as api_e:
+        logging.error(f"SA - Finnhub API Exception for {api_function.__name__}: {api_e}")
+        raise
+    except Exception as e:
+        logging.error(f"SA - Error in call_finnhub_api_with_limit_sa for {api_function.__name__}: {e}")
+        raise
+
+# --- 데이터 가져오기 함수들 (Finnhub으로 수정) ---
+
+def get_finnhub_stock_data(client, ticker, resolution="D", start_date_str=None, end_date_str=None, period_years=None):
+    """Finnhub API를 사용하여 주가 데이터(캔들) 가져오기"""
+    if not client:
+        logging.error(f"SA - Finnhub 클라이언트가 초기화되지 않았습니다 ({ticker}).")
+        return None
+
+    if start_date_str and end_date_str:
+        start_dt = datetime.strptime(start_date_str, "%Y-%m-%d")
+        end_dt = datetime.strptime(end_date_str, "%Y-%m-%d")
+    elif period_years:
+        end_dt = datetime.now()
+        start_dt = end_dt - relativedelta(years=period_years)
+    else: # 기본값: 약 1년
+        end_dt = datetime.now()
+        start_dt = end_dt - relativedelta(years=1)
+
+    # Finnhub은 datetime 객체가 아닌 timestamp를 사용
+    start_timestamp = int(datetime.combine(start_dt, dt_time.min).timestamp())
+    end_timestamp = int(datetime.combine(end_dt, dt_time.max).timestamp())
+
+    try:
+        logging.info(f"SA - Finnhub 캔들 요청: {ticker}, Res: {resolution}, Start: {start_dt.strftime('%Y-%m-%d')}, End: {end_dt.strftime('%Y-%m-%d')}")
+        res = call_finnhub_api_with_limit_sa(client.stock_candles, ticker, resolution, start_timestamp, end_timestamp)
+
+        if res and res.get('s') == 'ok':
+            df = pd.DataFrame(res)
+            if df.empty or 't' not in df.columns:
+                logging.warning(f"SA - {ticker}: Finnhub에서 캔들 데이터가 비어있거나 시간 정보가 없습니다.")
+                return pd.DataFrame()
+            df['t'] = pd.to_datetime(df['t'], unit='s', utc=True).dt.tz_convert('Asia/Seoul').dt.tz_localize(None)
+            df.set_index('t', inplace=True)
+            df.rename(columns={'o': 'Open', 'h': 'High', 'l': 'Low', 'c': 'Close', 'v': 'Volume'}, inplace=True)
+            for col in ['Open', 'High', 'Low', 'Close', 'Volume']:
+                if col in df.columns: df[col] = pd.to_numeric(df[col], errors='coerce')
+            df.dropna(subset=['Open', 'High', 'Low', 'Close'], inplace=True) # NaN 가격 데이터 제거
+            return df
+        elif res and res.get('s') == 'no_data':
+            logging.warning(f"SA - {ticker}: Finnhub에 해당 기간 데이터 없음.")
+            return pd.DataFrame()
+        else:
+            logging.error(f"SA - Finnhub 캔들 API 오류 ({ticker}): {res.get('s') if res else '응답 없음'}")
+            return None
+    except RateLimitException:
+        logging.error(f"SA - Finnhub API 호출 빈도 제한 초과 ({ticker}).")
+        return None
+    except Exception as e:
+        logging.error(f"SA - Finnhub 캔들 데이터 요청 중 예상치 못한 오류 ({ticker}): {e}\n{traceback.format_exc()}")
+        return None
+
+
 def get_fear_greed_index():
-    """공포-탐욕 지수 가져오기"""
+    """공포-탐욕 지수 가져오기 (기존과 동일)"""
     url = "https://api.alternative.me/fng/?limit=1&format=json&date_format=world"
     value, classification = None, None
     try:
@@ -72,823 +155,606 @@ def get_fear_greed_index():
                 try:
                     value = int(value_str)
                     classification = classification_str
-                    logging.info(f"F&G 성공: {value} ({classification})")
+                    logging.info(f"SA - F&G 성공: {value} ({classification})")
                 except (ValueError, TypeError):
-                    logging.warning(f"F&G 값 변환 오류: {value_str}")
+                    logging.warning(f"SA - F&G 값 변환 오류: {value_str}")
             else:
-                logging.warning("F&G 데이터 구조 오류.")
+                logging.warning("SA - F&G 데이터 구조 오류.")
         else:
-            logging.warning("F&G 데이터 형식 오류.")
+            logging.warning("SA - F&G 데이터 형식 오류.")
     except requests.exceptions.RequestException as e:
-        logging.error(f"F&G API 요청 오류: {e}")
+        logging.error(f"SA - F&G API 요청 오류: {e}")
     except Exception as e:
-        logging.error(f"F&G 처리 오류: {e}")
+        logging.error(f"SA - F&G 처리 오류: {e}")
     return value, classification
 
-def get_stock_data(ticker, start_date=None, end_date=None, period="1y"):
-    """주가 데이터 가져오기 (OHLCV 포함, NaN 처리 개선)"""
-    try:
-        stock = yf.Ticker(ticker)
-        if start_date and end_date:
-            data = stock.history(start=start_date, end=end_date, auto_adjust=False)
-        else:
-            data = stock.history(period=period, auto_adjust=False)
-        logging.info(f"{ticker} 주가 가져오기 시도 완료.")
+def get_macro_data(start_date_str, end_date_str=None, fred_key_param=None):
+    """매크로 지표 데이터 가져오기 (FRED는 유지, yfinance 부분은 제거 또는 대체 필요)"""
+    if fred_key_param is None: fred_key_param = FRED_API_KEY # 전역 변수 사용
+    if end_date_str is None: end_date_str = datetime.today().strftime("%Y-%m-%d")
 
-        if data.empty:
-            logging.warning(f"{ticker} 주가 데이터 비어있음.")
-            return None
-        if isinstance(data.index, pd.DatetimeIndex):
-            data.index = data.index.tz_localize(None)
-
-        required_cols = ['Open', 'High', 'Low', 'Close', 'Volume']
-        missing_cols = [col for col in required_cols if col not in data.columns]
-        if missing_cols:
-            logging.warning(f"{ticker}: 필수 컬럼 {missing_cols} 누락 -> NaN으로 채움.")
-            for col in missing_cols: # 수정: 명확한 for loop 사용
-                data[col] = np.nan
-
-        # 필수 컬럼 숫자형 변환 및 오류 시 NaN 처리
-        for col in required_cols:
-            if col in data.columns:
-                 data[col] = pd.to_numeric(data[col], errors='coerce')
-
-        # 기술적 지표 계산 위해 필요한 컬럼 NaN 있으면 해당 행 제거 (Close 제외)
-        essential_ta_cols = ['Open', 'High', 'Low', 'Volume']
-        initial_len = len(data)
-        # subset에 포함된 컬럼 중 하나라도 NaN이면 행 제거
-        data.dropna(subset=[col for col in essential_ta_cols if col in data.columns], inplace=True)
-        if len(data) < initial_len:
-             logging.warning(f"{ticker}: TA 계산 위한 필수 컬럼(O,H,L,V) NaN 값으로 {initial_len - len(data)} 행 제거")
-
-        return data
-
-    except Exception as e:
-        logging.error(f"티커 '{ticker}' 주가 데이터 가져오기 실패: {e}")
-        return None
-
-def get_macro_data(start_date, end_date=None, fred_key=None):
-    """매크로 지표 데이터 가져오기"""
-    if end_date is None:
-        end_date = datetime.today().strftime("%Y-%m-%d")
-    yf_tickers = {"^VIX": "VIX", "^TNX": "US10Y", "^IRX": "US13W", "DX-Y.NYB": "DXY"}
-    fred_series = {"FEDFUNDS": "FedFunds"}
-    expected_cols = ['Date'] + list(yf_tickers.values()) + list(fred_series.values())
+    # yfinance로 가져오던 지표들 (VIX, 금리 등)은 Finnhub에서 직접적인 대체재를 찾거나,
+    # 다른 소스를 사용해야 함. 일단 여기서는 제외하고 FRED만 사용.
+    # yf_tickers = {"^VIX": "VIX", "^TNX": "US10Y", "^IRX": "US13W", "DX-Y.NYB": "DXY"}
+    fred_series = {"FEDFUNDS": "FedFunds", "CPIAUCSL": "CPI", "UNRATE": "UnemploymentRate"} # 예시 지표 추가
+    expected_cols = ['Date'] + list(fred_series.values()) # yf_tickers 제외
     df_macro = pd.DataFrame()
-    all_yf_data = []
 
-    for tk, label in yf_tickers.items():
+    # yfinance 부분은 주석 처리 또는 삭제
+    # ...
+
+    if fred_key_param:
         try:
-            tmp = yf.download(tk, start=start_date, end=end_date, progress=False, timeout=15)
-            if not tmp.empty:
-                tmp = tmp[['Close']].rename(columns={"Close": label})
-                tmp.index = pd.to_datetime(tmp.index).tz_localize(None)
-                all_yf_data.append(tmp)
-                logging.info(f"{label} 성공")
-            else:
-                logging.warning(f"{label} 비어있음.")
-        except Exception as e:
-            logging.error(f"{label} 실패: {e}")
-
-    if all_yf_data:
-        df_macro = pd.concat(all_yf_data, axis=1)
-        if isinstance(df_macro.columns, pd.MultiIndex):
-            df_macro.columns = df_macro.columns.get_level_values(-1)
-
-    if fred_key:
-        try:
-            fred = Fred(api_key=fred_key)
-            fred_data = []
+            fred = Fred(api_key=fred_key_param)
+            fred_data_list = []
             for series_id, label in fred_series.items():
-                s = fred.get_series(series_id, start_date=start_date, end_date=end_date).rename(label)
-                s.index = pd.to_datetime(s.index).tz_localize(None)
-                fred_data.append(s)
-            if fred_data:
-                df_fred = pd.concat(fred_data, axis=1)
-                if not df_macro.empty:
-                    df_macro = df_macro.merge(df_fred, left_index=True, right_index=True, how='outer')
-                else:
-                    df_macro = df_fred
-                logging.info("FRED 병합/가져오기 성공")
+                s = fred.get_series(series_id, observation_start=start_date_str, observation_end=end_date_str).rename(label)
+                s.index = pd.to_datetime(s.index).tz_localize(None) # tz_localize(None) 추가
+                fred_data_list.append(s)
+            if fred_data_list:
+                df_macro = pd.concat(fred_data_list, axis=1)
+                logging.info("SA - FRED 데이터 가져오기/병합 성공.")
         except Exception as e:
-            logging.error(f"FRED 실패: {e}")
+            logging.error(f"SA - FRED 데이터 가져오기 실패: {e}")
     else:
-        logging.warning("FRED 키 없어 스킵.")
+        logging.warning("SA - FRED API 키 없어 매크로(FRED) 스킵.")
 
     if not df_macro.empty:
+        # 컬럼 존재 확인 및 NaN 채우기
         for col in expected_cols:
             if col != 'Date' and col not in df_macro.columns:
-                df_macro[col] = pd.NA
-                logging.warning(f"매크로 '{col}' 없어 NaN 추가.")
-        for col in df_macro.columns:
-            if col != 'Date':
-                df_macro[col] = pd.to_numeric(df_macro[col], errors='coerce')
-        df_macro = df_macro.sort_index().ffill().bfill()
+                df_macro[col] = pd.NA # 없는 컬럼은 NA로
+        for col in df_macro.columns: # 숫자형 변환
+            if col != 'Date': df_macro[col] = pd.to_numeric(df_macro[col], errors='coerce')
+
+        df_macro = df_macro.sort_index().ffill().bfill() # 시계열 특성 고려하여 ffill 후 bfill
         df_macro = df_macro.reset_index().rename(columns={'index': 'Date'})
         df_macro["Date"] = pd.to_datetime(df_macro["Date"])
-        logging.info("매크로 처리 완료.")
-        return df_macro[expected_cols]
+        logging.info("SA - 매크로 데이터 처리 완료.")
+        # 반환할 컬럼만 선택 (expected_cols 순서대로, 없는건 NA로 채워짐)
+        return df_macro[[col for col in expected_cols if col in df_macro.columns]]
     else:
-        logging.warning("매크로 가져오기 최종 실패.")
+        logging.warning("SA - 매크로 데이터 가져오기 최종 실패 (FRED 데이터 없음 또는 오류).")
         return pd.DataFrame(columns=expected_cols)
 
-# --- 기본적 분석 데이터 가져오기 함수들 ---
-def format_market_cap(mc):
-    """시가총액 숫자 포맷팅"""
+
+def format_market_cap_fh(mc):
+    """시가총액 숫자 포맷팅 (기존과 동일)"""
     if isinstance(mc, (int, float)) and mc > 0:
+        # Finnhub의 company_profile2는 marketCapitalization을 이미 백만 단위로 줄 수 있음 (확인 필요)
+        # 만약 그대로 숫자라면 기존 로직 사용, 백만 단위라면 조정 필요
+        # 여기서는 일단 입력값이 실제 시총 값이라고 가정
         if mc >= 1e12: return f"${mc / 1e12:.2f} T"
         elif mc >= 1e9: return f"${mc / 1e9:.2f} B"
         elif mc >= 1e6: return f"${mc / 1e6:.2f} M"
         else: return f"${mc:,.0f}"
     return "N/A"
 
-def find_financial_statement_item(index, keywords, exact_match_keywords=None, case_sensitive=False):
-    """재무제표 인덱스 항목 찾기"""
-    if not isinstance(index, pd.Index): return None
-    flags = 0 if case_sensitive else re.IGNORECASE
+def get_fundamental_data_finnhub(client, ticker):
+    """Finnhub API를 사용하여 주요 기본 지표 가져오기"""
+    if not client:
+        logging.error(f"SA - Finnhub 클라이언트가 초기화되지 않았습니다 ({ticker}).")
+        return {key: "N/A" for key in ["시가총액", "PER", "EPS", "배당수익률", "베타", "업종", "산업", "요약", "웹사이트"]}
 
-    if exact_match_keywords:
-        for exact_key in exact_match_keywords:
-            if exact_key in index:
-                logging.debug(f"정확 매칭: '{exact_key}' for {keywords}")
-                return exact_key
-
-    pattern_keywords = [re.escape(k) for k in keywords]
-    pattern = r'\b' + r'\b.*\b'.join(pattern_keywords) + r'\b'
-    matches = []
-    for item in index:
-        if isinstance(item, str):
-            try:
-                if re.search(pattern, item, flags=flags):
-                    matches.append(item)
-            except Exception as e:
-                logging.warning(f"항목명 검색 정규식 오류({keywords}, item='{item}'): {e}")
-                continue
-
-    if matches:
-        best_match = min(matches, key=len)
-        logging.debug(f"포함 매칭: '{best_match}' for {keywords}")
-        return best_match
-
-    logging.warning(f"재무 항목 찾기 최종 실패: {keywords}")
-    return None
-
-def get_fundamental_data(ticker):
-    """yfinance .info 사용하여 주요 기본 지표 가져오기"""
-    logging.info(f"{ticker}: .info 가져오기...")
-    fundamentals = {key: "N/A" for key in ["시가총액", "PER", "EPS", "배당수익률", "베타", "업종", "산업", "요약"]}
+    fundamentals = {key: "N/A" for key in ["시가총액", "PER", "EPS", "배당수익률", "베타", "업종", "산업", "요약", "웹사이트"]}
     try:
-        stock = yf.Ticker(ticker)
-        info = stock.info
-        if not info or info.get('regularMarketPrice') is None:
-            logging.warning(f"'{ticker}' 유효 .info 없음.")
-            return fundamentals
+        # 기업 프로필 (시총, 업종, 산업, 요약, 웹사이트 등)
+        profile = call_finnhub_api_with_limit_sa(client.company_profile2, symbol=ticker)
+        if profile:
+            # Finnhub의 marketCapitalization은 보통 백만 단위이므로 *1e6 필요할 수 있음. 문서 확인!
+            # 여기서는 API가 실제 값을 준다고 가정하고 format_market_cap_fh 직접 사용
+            mc = profile.get('marketCapitalization')
+            if isinstance(mc, (int, float)):
+                 fundamentals["시가총액"] = format_market_cap_fh(mc * 1_000_000) # 백만 단위 조정 가정
+            else:
+                 fundamentals["시가총액"] = "N/A"
 
-        fundamentals["시가총액"] = format_market_cap(info.get("marketCap"))
-        fwd_pe = info.get('forwardPE')
-        trl_pe = info.get('trailingPE')
-        if isinstance(fwd_pe, (int, float)):
-            fundamentals["PER"] = f"{fwd_pe:.2f} (Fwd)"
-        elif isinstance(trl_pe, (int, float)):
-            fundamentals["PER"] = f"{trl_pe:.2f} (Trl)"
+            fundamentals["업종"] = profile.get('finnhubIndustry', "N/A") # 'sector' 대신 'finnhubIndustry'
+            fundamentals["산업"] = profile.get('ipo', "N/A") # Finnhub은 'industry'를 명확히 제공하지 않음. IPO 날짜로 대체하거나 다른 필드 찾아야 함.
+            fundamentals["요약"] = profile.get('description') if profile.get('description') else "N/A" # 'longBusinessSummary' 대신 'description'
+            fundamentals["웹사이트"] = profile.get('weburl', "N/A")
+            logging.info(f"SA - {ticker} Finnhub 프로필 로드 성공.")
+        else:
+            logging.warning(f"SA - {ticker} Finnhub 프로필 정보 없음.")
 
-        eps_val = info.get('trailingEps')
-        fundamentals["EPS"] = f"{eps_val:.2f}" if isinstance(eps_val, (int, float)) else "N/A"
+        # 주요 재무 지표 (PER, EPS, 배당수익률, 베타 등)
+        # company_basic_financials는 'metric' 필드 아래에 여러 지표를 포함
+        basic_financials = call_finnhub_api_with_limit_sa(client.company_basic_financials, ticker, 'all')
+        if basic_financials and basic_financials.get('metric'):
+            metrics = basic_financials['metric']
+            # PER: peNormalizedAnnual 또는 peTTM. 분기별 데이터는 series.quarterly.pe 사용 가능
+            fundamentals["PER"] = f"{metrics.get('peTTM', metrics.get('peNormalizedAnnual', 'N/A')):.2f}" if isinstance(metrics.get('peTTM', metrics.get('peNormalizedAnnual')), (float, int)) else "N/A"
+            # EPS: epsNormalizedAnnual 또는 epsTTM
+            fundamentals["EPS"] = f"{metrics.get('epsTTM', metrics.get('epsNormalizedAnnual', 'N/A')):.2f}" if isinstance(metrics.get('epsTTM', metrics.get('epsNormalizedAnnual')), (float, int)) else "N/A"
+            # 배당수익률: dividendYieldAnnual 또는 dividendYieldIndicatedAnnual
+            div_yield = metrics.get('dividendYieldAnnual', metrics.get('dividendYieldIndicatedAnnual'))
+            fundamentals["배당수익률"] = f"{div_yield * 100:.2f}%" if isinstance(div_yield, (float, int)) and div_yield > 0 else "N/A"
+            # 베타: beta
+            fundamentals["베타"] = f"{metrics.get('beta', 'N/A'):.2f}"  if isinstance(metrics.get('beta'), (float, int)) else "N/A"
+            logging.info(f"SA - {ticker} Finnhub 기본 재무 지표 로드 성공.")
+        else:
+            logging.warning(f"SA - {ticker} Finnhub 기본 재무 지표 없음.")
 
-        div_yield = info.get('dividendYield')
-        fundamentals["배당수익률"] = f"{div_yield * 100:.2f}%" if isinstance(div_yield, (int, float)) and div_yield > 0 else "N/A"
-
-        beta_val = info.get('beta')
-        fundamentals["베타"] = f"{beta_val:.2f}" if isinstance(beta_val, (int, float)) else "N/A"
-
-        fundamentals["업종"] = info.get("sector", "N/A")
-        fundamentals["산업"] = info.get("industry", "N/A")
-        fundamentals["요약"] = info.get("longBusinessSummary", "N/A")
-
-        logging.info(f"{ticker} .info 성공.")
         return fundamentals
+    except RateLimitException:
+        logging.error(f"SA - Finnhub API 호출 빈도 제한 초과 ({ticker}, 기본 정보).")
+        return fundamentals # 이미 채워진 값 또는 N/A 반환
     except Exception as e:
-        logging.error(f"{ticker} .info 실패: {e}")
+        logging.error(f"SA - Finnhub 기본 정보 가져오기 실패 ({ticker}): {e}\n{traceback.format_exc()}")
         return fundamentals
 
-def get_operating_margin_trend(ticker, num_periods=4):
-    """최근 분기별 영업이익률 추세 계산"""
-    logging.info(f"{ticker}: 영업이익률 추세 ({num_periods}분기)...")
+
+# --- 재무 추세 함수들 (Finnhub Basic Financials 기반으로 수정 시도) ---
+# Finnhub 무료 API는 상세 재무제표 항목을 제공하지 않으므로,
+# company_basic_financials에서 제공하는 'series' (annual 또는 quarterly) 데이터를 활용해야 합니다.
+# 이는 기존 yfinance 기반 함수와 매우 다를 수 있습니다.
+
+def get_financial_metric_trend_finnhub(client, ticker, metric_name, num_periods=4, period_type='quarterly'):
+    """Finnhub company_basic_financials에서 특정 재무 지표의 추세를 가져옵니다."""
+    if not client: return None
+    logging.info(f"SA - {ticker}: Finnhub {period_type} '{metric_name}' 추세 ({num_periods} 기간)...")
     try:
-        stock = yf.Ticker(ticker)
-        qf = stock.quarterly_financials
-        if qf.empty:
-            logging.warning(f"{ticker}: 분기 재무 없음.")
-            return None
-        revenue_col = find_financial_statement_item(qf.index, ['Total', 'Revenue'], ['Total Revenue', 'Revenue'])
-        op_income_col = find_financial_statement_item(qf.index, ['Operating', 'Income'], ['Operating Income', 'Operating Income Loss'])
-        if not revenue_col or not op_income_col:
-            logging.warning(f"{ticker}: 매출/영업이익 항목 못찾음.")
+        financials = call_finnhub_api_with_limit_sa(client.company_basic_financials, ticker, 'all')
+        if not financials or 'series' not in financials or period_type not in financials['series']:
+            logging.warning(f"SA - {ticker}: Finnhub에 {period_type} 재무 시리즈 데이터 없음.")
             return None
 
-        qf_recent = qf.iloc[:, :num_periods]
-        df = qf_recent.loc[[revenue_col, op_income_col]].T.sort_index()
-        df.index = pd.to_datetime(df.index)
-
-        df[revenue_col] = pd.to_numeric(df[revenue_col], errors='coerce')
-        df[op_income_col] = pd.to_numeric(df[op_income_col], errors='coerce')
-        df[revenue_col] = df[revenue_col].replace(0, np.nan)
-        df.dropna(subset=[revenue_col, op_income_col], inplace=True)
-
-        if df.empty:
-            logging.warning(f"{ticker}: 영업이익률 계산 데이터 부족.")
+        series_data = financials['series'][period_type]
+        if metric_name not in series_data or not isinstance(series_data[metric_name], list):
+            logging.warning(f"SA - {ticker}: Finnhub {period_type} 시리즈에 '{metric_name}' 없음 또는 리스트 아님.")
             return None
 
-        df['Op Margin (%)'] = (df[op_income_col] / df[revenue_col]) * 100 # 컬럼명 유지
-        df['Op Margin (%)'] = df['Op Margin (%)'].round(2)
+        trend_data = []
+        # 데이터는 최신순으로 정렬되어 있다고 가정 (Finnhub 문서 확인 필요)
+        # 또는 'period' 필드를 기준으로 정렬 필요
+        # 여기서는 API가 최신순으로 제공한다고 가정하고 상위 num_periods개 사용
+        for item in sorted(series_data[metric_name], key=lambda x: x.get('period', ''), reverse=True)[:num_periods]:
+            if 'period' in item and 'v' in item: # 'v'는 값(value)
+                value = item['v']
+                # 특정 지표에 대해 % 변환 등이 필요할 수 있음
+                if metric_name in ['operatingMarginAnnual', 'operatingMarginQuarterly',
+                                   'roeTTM', 'roeAnnual', 'roeQuarterly', # roe는 이미 %일 수 있음, 확인 필요
+                                   'netMarginTTM', 'netMarginAnnual', 'netMarginQuarterly']: # 예시: 마진율
+                    value *= 100 # %로 표시하기 위함 (API가 이미 %로 주면 이 줄은 불필요)
 
-        res = df[['Op Margin (%)']].reset_index().rename(columns={'index':'Date'})
-        res['Date'] = res['Date'].dt.strftime('%Y-%m-%d')
-        logging.info(f"{ticker}: {len(res)}개 영업이익률 계산 완료.")
-        return res.to_dict('records')
+                trend_data.append({
+                    "Date": item['period'], # YYYY-MM-DD 형식의 문자열
+                    # 컬럼명을 app.py에서 사용하는 이름으로 맞춰주는 것이 좋음
+                    # 예: 'Op Margin (%)', 'ROE (%)', 'D/E Ratio', 'Current Ratio'
+                    # 여기서는 일반적인 컬럼명 사용
+                    f"{metric_name.replace(period_type.capitalize(),'').replace('Annual','').replace('Quarterly','').replace('TTM','')} ({'%' if '%' in metric_name or 'Margin' in metric_name or 'roe' in metric_name.lower() else 'Ratio' if 'Ratio' in metric_name else ''})".strip() : round(value, 2)
+                })
+        if not trend_data:
+            logging.warning(f"SA - {ticker}: Finnhub에서 '{metric_name}'에 대한 유효한 추세 데이터 ({num_periods}개)를 찾지 못함.")
+            return None
+
+        # 날짜 오름차순으로 정렬
+        df_trend = pd.DataFrame(trend_data).sort_values(by="Date", ascending=True)
+        logging.info(f"SA - {ticker}: Finnhub {metric_name} 추세 ({len(df_trend)}개) 계산 완료.")
+        return df_trend.to_dict('records') # app.py의 기존 형식과 맞춤
+
+    except RateLimitException:
+        logging.error(f"SA - Finnhub API 호출 빈도 제한 초과 ({ticker}, 재무 추세).")
+        return None
     except Exception as e:
-        logging.error(f"{ticker}: 영업이익률 계산 오류: {e}")
+        logging.error(f"SA - {ticker}: Finnhub 재무 지표('{metric_name}') 추세 계산 오류: {e}\n{traceback.format_exc()}")
         return None
 
-def get_roe_trend(ticker, num_periods=4):
-    """최근 분기별 ROE(%) 추세 계산"""
-    logging.info(f"{ticker}: ROE 추세 ({num_periods}분기)...")
-    try:
-        stock = yf.Ticker(ticker)
-        qf = stock.quarterly_financials
-        qbs = stock.quarterly_balance_sheet
-        if qf.empty or qbs.empty:
-            logging.warning(f"{ticker}: 분기 재무/대차대조표 없음.")
-            return None
+# 기존 재무 추세 함수들을 위 헬퍼 함수를 사용하도록 변경
+def get_operating_margin_trend_fh(client, ticker, num_periods=4):
+    # Finnhub basic financials에서 operatingMarginTTM, operatingMarginAnnual, operatingMarginQuarterly 등을 확인
+    # 여기서는 분기별 우선, 없으면 연간 시도
+    trend = get_financial_metric_trend_finnhub(client, ticker, 'operatingMarginQuarterly', num_periods, 'quarterly')
+    if not trend:
+        trend = get_financial_metric_trend_finnhub(client, ticker, 'operatingMarginAnnual', num_periods, 'annual')
+    # app.py에서 기대하는 컬럼명 'Op Margin (%)'으로 변경
+    if trend:
+        return [{"Date": rec["Date"], "Op Margin (%)": rec[next(k for k in rec if k != 'Date')]} for rec in trend]
+    return []
 
-        ni_col = find_financial_statement_item(qf.index, ['Net', 'Income'], ['Net Income', 'Net Income Common Stockholders']) # 후보 축소
-        eq_col = find_financial_statement_item(qbs.index, ['Stockholder', 'Equity'], ['Total Stockholder Equity']) or find_financial_statement_item(qbs.index, ['Total', 'Equity'])
-        if not ni_col or not eq_col:
-            logging.warning(f"{ticker}: 순이익/자본 항목 못찾음.")
-            return None
 
-        qf_r = qf.loc[[ni_col]].iloc[:, :num_periods].T
-        qbs_r = qbs.loc[[eq_col]].iloc[:, :num_periods].T
-        df = pd.merge(qf_r, qbs_r, left_index=True, right_index=True, how='outer').sort_index()
-        df.index = pd.to_datetime(df.index)
+def get_roe_trend_fh(client, ticker, num_periods=4):
+    # roeTTM, roeAnnual, roeQuarterly 등
+    trend = get_financial_metric_trend_finnhub(client, ticker, 'roeQuarterly', num_periods, 'quarterly')
+    if not trend:
+        trend = get_financial_metric_trend_finnhub(client, ticker, 'roeAnnual', num_periods, 'annual')
+    if trend:
+        return [{"Date": rec["Date"], "ROE (%)": rec[next(k for k in rec if k != 'Date')]} for rec in trend]
+    return []
 
-        df[ni_col] = pd.to_numeric(df[ni_col], errors='coerce')
-        df[eq_col] = pd.to_numeric(df[eq_col], errors='coerce')
-        df[eq_col] = df[eq_col].apply(lambda x: x if pd.notna(x) and x > 0 else np.nan)
-        df.dropna(subset=[ni_col, eq_col], inplace=True)
 
-        if df.empty:
-            logging.warning(f"{ticker}: ROE 계산 데이터 부족.")
-            return None
+def get_debt_to_equity_trend_fh(client, ticker, num_periods=4):
+    # Finnhub basic financials는 D/E Ratio를 직접 제공할 수 있음 (예: debtEquityRatioQuarterly, debtEquityRatioAnnual)
+    # totalDebtToEquityTTM, totalDebtToEquityAnnual, totalDebtToEquityQuarterly 등
+    trend = get_financial_metric_trend_finnhub(client, ticker, 'totalDebtToEquityQuarterly', num_periods, 'quarterly')
+    if not trend:
+        trend = get_financial_metric_trend_finnhub(client, ticker, 'totalDebtToEquityAnnual', num_periods, 'annual')
+    if trend:
+        return [{"Date": rec["Date"], "D/E Ratio": rec[next(k for k in rec if k != 'Date')]} for rec in trend]
+    return []
 
-        df['ROE (%)'] = (df[ni_col] / df[eq_col]) * 100
-        df['ROE (%)'] = df['ROE (%)'].round(2)
+def get_current_ratio_trend_fh(client, ticker, num_periods=4):
+    # currentRatioQuarterly, currentRatioAnnual 등
+    trend = get_financial_metric_trend_finnhub(client, ticker, 'currentRatioQuarterly', num_periods, 'quarterly')
+    if not trend:
+        trend = get_financial_metric_trend_finnhub(client, ticker, 'currentRatioAnnual', num_periods, 'annual')
+    if trend:
+        return [{"Date": rec["Date"], "Current Ratio": rec[next(k for k in rec if k != 'Date')]} for rec in trend]
+    return []
 
-        res = df[['ROE (%)']].reset_index().rename(columns={'index':'Date'})
-        res['Date'] = res['Date'].dt.strftime('%Y-%m-%d')
-        logging.info(f"{ticker}: {len(res)}개 ROE 계산 완료.")
-        return res.to_dict('records')
-    except Exception as e:
-        logging.error(f"{ticker}: ROE 계산 오류: {e}")
-        return None
-
-def get_debt_to_equity_trend(ticker, num_periods=4):
-    """최근 분기별 부채비율(D/E Ratio) 추세 계산"""
-    logging.info(f"{ticker}: 부채비율 추세 ({num_periods}분기)...")
-    try:
-        stock = yf.Ticker(ticker)
-        qbs = stock.quarterly_balance_sheet
-        if qbs.empty:
-            logging.warning(f"{ticker}: 분기 대차대조표 없음.")
-            return None
-
-        eq_col = find_financial_statement_item(qbs.index, ['Stockholder', 'Equity'], ['Total Stockholder Equity']) or find_financial_statement_item(qbs.index, ['Total', 'Equity'])
-        if not eq_col:
-            logging.warning(f"{ticker}: 자본 항목 못찾음.")
-            return None
-
-        td_col = find_financial_statement_item(qbs.index, ['Total', 'Debt'])
-        sd_col = find_financial_statement_item(qbs.index, ['Current', 'Debt'])
-        ld_col = find_financial_statement_item(qbs.index, ['Long', 'Term', 'Debt'])
-
-        req_cols = [eq_col]
-        use_td = False
-        calc_d = False
-
-        if td_col:
-            req_cols.append(td_col)
-            use_td = True
-            logging.info(f"{ticker}: Total Debt 사용.")
-        elif sd_col and ld_col:
-            req_cols.extend([sd_col, ld_col])
-            calc_d = True
-            logging.info(f"{ticker}: 단기+장기 부채 합산.")
-        else:
-            logging.warning(f"{ticker}: 총부채 항목 못찾음.")
-            return None
-
-        req_cols = list(set(req_cols))
-        qbs_r = qbs.loc[req_cols].iloc[:, :num_periods].T
-        df = qbs_r.copy()
-        df.index = pd.to_datetime(df.index)
-        df = df.sort_index()
-
-        for col in req_cols:
-            df[col] = pd.to_numeric(df[col], errors='coerce')
-
-        df[eq_col] = df[eq_col].apply(lambda x: x if pd.notna(x) and x != 0 else np.nan)
-
-        if use_td:
-            df['Calc Debt'] = df[td_col]
-        elif calc_d:
-            df['Calc Debt'] = df[sd_col].fillna(0) + df[ld_col].fillna(0)
-        else:
-            return None
-
-        df.dropna(subset=['Calc Debt', eq_col], inplace=True)
-
-        if df.empty:
-            logging.warning(f"{ticker}: 부채비율 계산 데이터 부족.")
-            return None
-
-        df['D/E Ratio'] = df['Calc Debt'] / df[eq_col]
-        df['D/E Ratio'] = df['D/E Ratio'].round(2)
-
-        res = df[['D/E Ratio']].reset_index().rename(columns={'index':'Date'})
-        res['Date'] = res['Date'].dt.strftime('%Y-%m-%d')
-        logging.info(f"{ticker}: {len(res)}개 부채비율 계산 완료.")
-        return res.to_dict('records')
-    except Exception as e:
-        logging.error(f"{ticker}: 부채비율 계산 오류: {e}")
-        return None
-
-def get_current_ratio_trend(ticker, num_periods=4):
-    """최근 분기별 유동비율 추세 계산"""
-    logging.info(f"{ticker}: 유동비율 추세 ({num_periods}분기)...")
-    try:
-        stock = yf.Ticker(ticker)
-        qbs = stock.quarterly_balance_sheet
-        if qbs.empty:
-            logging.warning(f"{ticker}: 분기 대차대조표 없음.")
-            return None
-        ca_col = find_financial_statement_item(qbs.index, ['Total', 'Current', 'Assets'])
-        cl_col = find_financial_statement_item(qbs.index, ['Total', 'Current', 'Liabilities'])
-        if not ca_col or not cl_col:
-            logging.warning(f"{ticker}: 유동자산/부채 항목 못찾음.")
-            return None
-        if ca_col == cl_col:
-            logging.error(f"{ticker}: 유동자산/부채 항목 동일 식별('{ca_col}').")
-            return None
-
-        req_cols = [ca_col, cl_col]
-        qbs_r = qbs.loc[req_cols].iloc[:, :num_periods].T
-        df = qbs_r.copy()
-        df.index = pd.to_datetime(df.index)
-        df = df.sort_index()
-
-        df[ca_col] = pd.to_numeric(df[ca_col], errors='coerce')
-        df[cl_col] = pd.to_numeric(df[cl_col], errors='coerce')
-
-        df[cl_col] = df[cl_col].apply(lambda x: x if pd.notna(x) and x > 0 else np.nan)
-        df.dropna(subset=[ca_col, cl_col], inplace=True)
-
-        if df.empty:
-            logging.warning(f"{ticker}: 유동비율 계산 데이터 부족.")
-            return None
-
-        df['Current Ratio'] = df[ca_col] / df[cl_col]
-        df['Current Ratio'] = df['Current Ratio'].round(2)
-
-        res = df[['Current Ratio']].reset_index().rename(columns={'index':'Date'})
-        res['Date'] = res['Date'].dt.strftime('%Y-%m-%d')
-        logging.info(f"{ticker}: {len(res)}개 유동비율 계산 완료.")
-        return res.to_dict('records')
-    except Exception as e:
-        logging.error(f"{ticker}: 유동비율 계산 오류: {e}")
-        return None
 
 # --- 분석 및 시각화 함수들 ---
-def plot_stock_chart(ticker, start_date=None, end_date=None, period="1y"):
-    """주가 차트 Figure 객체 반환"""
-    df = get_stock_data(ticker, start_date=start_date, end_date=end_date, period=period)
+def plot_stock_chart_fh(client, ticker, start_date_str=None, end_date_str=None, period_years=None, resolution="D"):
+    """주가 차트 Figure 객체 반환 (Finnhub 데이터 사용)"""
+    df = get_finnhub_stock_data(client, ticker, resolution, start_date_str, end_date_str, period_years)
     if df is None or df.empty:
-        logging.error(f"{ticker} 차트 실패: 데이터 없음")
-        return None
+        logging.error(f"SA - {ticker} Finnhub 차트 실패: 데이터 없음")
+        fig = go.Figure() # 빈 Figure 반환
+        fig.update_layout(title=f'{ticker} 주가/거래량 차트 (데이터 없음)', xaxis_title="날짜", yaxis_title="가격")
+        return fig # None 대신 빈 Figure 반환하여 app.py에서 오류 방지
     try:
         fig = make_subplots(rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.03, row_heights=[0.7, 0.3])
         fig.add_trace(go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name='가격'), row=1, col=1)
         fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='거래량', marker_color='rgba(0,0,100,0.6)'), row=2, col=1)
-        fig.update_layout(title=f'{ticker} 주가/거래량 차트', yaxis_title='가격', yaxis2_title='거래량', xaxis_rangeslider_visible=False, hovermode='x unified', margin=dict(l=20, r=20, t=40, b=20))
+        fig.update_layout(title=f'{ticker} 주가/거래량 차트 (Finnhub)', yaxis_title='가격', yaxis2_title='거래량', xaxis_rangeslider_visible=False, hovermode='x unified', margin=dict(l=20, r=20, t=40, b=20))
         fig.update_yaxes(title_text="가격", row=1, col=1)
         fig.update_yaxes(title_text="거래량", row=2, col=1)
-        logging.info(f"{ticker} 차트 생성 완료")
+        logging.info(f"SA - {ticker} Finnhub 차트 생성 완료")
         return fig
     except Exception as e:
-        logging.error(f"{ticker} 차트 생성 오류: {e}")
-        return None
+        logging.error(f"SA - {ticker} Finnhub 차트 생성 오류: {e}")
+        fig = go.Figure()
+        fig.update_layout(title=f'{ticker} 주가/거래량 차트 (생성 오류)', xaxis_title="날짜", yaxis_title="가격")
+        return fig
 
-def get_news_sentiment(ticker, api_key):
-    """뉴스 감정 분석"""
-    if not api_key:
-        logging.warning("NEWS_API_KEY 없음.")
-        return ["뉴스 API 키 미설정."]
-    url = f"https://newsapi.org/v2/everything?q={ticker}&pageSize=20&language=en&sortBy=publishedAt&apiKey={api_key}"
+def get_news_sentiment_finnhub(client, ticker):
+    """Finnhub API를 사용하여 뉴스 및 감정 분석"""
+    if not client:
+        logging.warning("SA - Finnhub 클라이언트 없음 (뉴스 분석).")
+        return ["Finnhub 클라이언트 미설정."]
+
+    output = []
+    total_sentiment_score = 0
+    article_count = 0
+
     try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        articles = response.json().get('articles', [])
-        if not articles:
-            logging.info(f"{ticker}: 관련 뉴스 없음.")
-            return ["관련 뉴스 없음."]
+        # 최근 뉴스 가져오기 (Finnhub은 날짜 범위 지정 가능)
+        # 예: 최근 7일 뉴스
+        today_str = datetime.now().strftime("%Y-%m-%d")
+        seven_days_ago_str = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+        news_items = call_finnhub_api_with_limit_sa(client.company_news, ticker, _from=seven_days_ago_str, to=today_str)
 
-        output, total_pol, count = [], 0, 0
-        for i, article in enumerate(articles, 1):
-            title = article.get('title', 'N/A')
-            description = article.get('description', '') or ""
-            content = article.get('content', '') or ""
-            text = description or content or title or ""
+        if not news_items:
+            logging.info(f"SA - {ticker}: Finnhub 관련 뉴스 없음 (최근 7일).")
+            return ["Finnhub 관련 뉴스 없음 (최근 7일)."]
 
-            if text and text != "[Removed]":
-                try:
-                    blob = TextBlob(text)
-                    pol = blob.sentiment.polarity
-                    output.append(f"{i}. {title} | 감정: {pol:.2f}")
-                    total_pol += pol
-                    count += 1
-                except Exception as text_e:
-                    logging.warning(f"뉴스 처리 오류({title}): {text_e}")
-                    output.append(f"{i}. {title} | 감정 분석 오류")
-            else:
-                output.append(f"{i}. {title} | 내용 없음")
+        for i, article in enumerate(news_items[:20], 1): # 최대 20개 처리
+            headline = article.get('headline', 'N/A')
+            summary = article.get('summary', '')
+            source = article.get('source', '')
+            url = article.get('url', '#')
+            # Finnhub news_sentiment는 별도 호출 필요 (뉴스 ID 기반이 아님)
+            # 여기서는 뉴스 헤드라인과 요약을 기반으로 간단히 표시하거나,
+            # 만약 Finnhub의 'sentiment' 필드가 뉴스 객체에 있다면 사용
+            sentiment_score = article.get('sentiment', None) # 이 필드가 있는지 확인 필요, 없으면 TextBlob 등 사용
+            # Finnhub 자체 company_news에는 sentiment 필드가 없을 수 있음.
+            # news_sentiment 엔드포인트는 티커에 대한 전체적인 감정 점수를 제공.
+            # 여기서는 개별 기사 감정은 없다고 가정하고, 헤드라인만 나열
 
-        avg_pol = total_pol / count if count > 0 else 0
-        logging.info(f"{ticker} 뉴스 분석 완료 (평균: {avg_pol:.2f})")
-        output.insert(0, f"총 {count}개 분석 | 평균 감성: {avg_pol:.2f}")
+            output.append(f"{i}. [{source}] {headline} - <a href='{url}' target='_blank'>기사보기</a>")
+            # sentiment_score가 있다면 활용
+            # if sentiment_score is not None:
+            #     output[-1] += f" (감정: {sentiment_score:.2f})"
+            #     total_sentiment_score += sentiment_score
+            #     article_count +=1
+
+        # 티커에 대한 전반적인 뉴스 감정 (Finnhub news_sentiment 엔드포인트)
+        company_sentiment = call_finnhub_api_with_limit_sa(client.news_sentiment, ticker)
+        if company_sentiment and company_sentiment.get('sentiment') and company_sentiment['sentiment'].get('companyNewsScore') is not None:
+            avg_pol = company_sentiment['sentiment']['companyNewsScore']
+            buzz = company_sentiment.get('buzz', {}).get('articlesInLastWeek', 'N/A')
+            output.insert(0, f"Finnhub 뉴스 감정 분석: 평균 점수 {avg_pol:.2f} (지난 주 기사 수: {buzz})")
+            article_count = 1 # 대표 점수가 있으므로 count=1로 설정하여 평균 표시
+            total_sentiment_score = avg_pol # 평균 점수를 대표로 사용
+        elif article_count > 0: # 개별 기사 감정이 있었다면 (현재 로직에서는 이 부분 실행 안됨)
+            avg_pol = total_sentiment_score / article_count
+            output.insert(0, f"총 {article_count}개 분석 | 평균 감성: {avg_pol:.2f} (TextBlob 기반 - 가정)")
+        else:
+            output.insert(0, f"총 {len(news_items[:20])}개 뉴스 헤드라인 (감정 분석은 요약 정보 참고)")
+
+
+        logging.info(f"SA - {ticker} Finnhub 뉴스 분석 완료.")
         return output
-    except requests.exceptions.RequestException as e:
-        logging.error(f"뉴스 API 요청 실패: {e}")
-        return [f"뉴스 API 요청 실패: {e}"]
+
+    except RateLimitException:
+        logging.error(f"SA - Finnhub API 호출 빈도 제한 초과 ({ticker}, 뉴스).")
+        return ["Finnhub 뉴스 API 호출 빈도 제한."]
     except Exception as e:
-        logging.error(f"뉴스 분석 오류: {e}")
-        return ["뉴스 분석 중 오류 발생."]
+        logging.error(f"SA - Finnhub 뉴스 분석 오류 ({ticker}): {e}\n{traceback.format_exc()}")
+        return [f"Finnhub 뉴스 분석 중 오류 발생: {e}"]
 
-# --- ⭐ run_prophet_forecast (changepoint_prior_scale 인자 추가 및 CV 수정 반영) ---
-def run_prophet_forecast(ticker, start_date, end_date=None, forecast_days=30, fred_key=None, changepoint_prior_scale=0.05): # 인자 추가됨
-    """Prophet 예측 (기술 지표 Regressor + 파라미터 적용)"""
-    logging.info(f"{ticker}: Prophet 예측 시작 (changepoint_prior_scale={changepoint_prior_scale})...")
-    if end_date is None:
-        end_date = datetime.today().strftime("%Y-%m-%d")
 
-    # 1. 초기 주가 데이터 로딩 (OHLCV 포함)
-    df_stock_initial = None # 변수명 변경
-    try:
-        df_stock_initial = get_stock_data(ticker, start_date=start_date, end_date=end_date)
-        # get_stock_data에서 OHLCV 존재 및 NaN 처리함
-        if df_stock_initial is None or df_stock_initial.empty:
-            # get_stock_data 내부에서 로깅하므로 여기서는 반환
-            return None, None, None
+def run_prophet_forecast_fh(client, ticker, start_date_str, end_date_str=None, forecast_days=30, fred_key_param=None, changepoint_prior_scale=0.05):
+    logging.info(f"SA - {ticker}: Finnhub Prophet 예측 시작 (cp_prior={changepoint_prior_scale})...")
+    if end_date_str is None: end_date_str = datetime.today().strftime("%Y-%m-%d")
 
-        # Close NaN은 Prophet이 처리 가능하므로 여기서는 제거 안 함
-        # 단, 이후 단계에서 Regressor와 병합 시 문제될 수 있으므로 주의 필요
-        # df_stock_initial.dropna(subset=["Close"], inplace=True) # 일단 주석 처리
+    # 1. 주가 데이터 로딩 (Finnhub 사용)
+    df_stock_initial = get_finnhub_stock_data(client, ticker, "D", start_date_str, end_date_str)
+    if df_stock_initial is None or df_stock_initial.empty:
+        logging.error(f"SA - Prophet 실패: {ticker} Finnhub 주가 데이터 로딩 실패 또는 없음.")
+        return None, None, None, 0.0 # MAPE는 0.0 또는 다른 기본값
 
-        # 날짜 인덱스를 컬럼으로 변환하고 필요한 컬럼 선택
-        df_stock_processed = df_stock_initial.reset_index()[["Date", "Close", "Open", "High", "Low", "Volume"]].copy()
-        df_stock_processed["Date"] = pd.to_datetime(df_stock_processed["Date"])
+    df_stock_processed = df_stock_initial.reset_index()[["t", "Close", "Open", "High", "Low", "Volume"]].copy() # 't' 사용
+    df_stock_processed.rename(columns={"t": "Date"}, inplace=True) # 'Date'로 변경
+    df_stock_processed["Date"] = pd.to_datetime(df_stock_processed["Date"])
 
-        # Close가 NaN이면 예측 자체가 불가능하므로 해당 행 제거
-        if df_stock_processed["Close"].isnull().any():
-            rows_before = len(df_stock_processed)
-            df_stock_processed.dropna(subset=["Close"], inplace=True)
-            logging.warning(f"{ticker}: 'Close' 컬럼 NaN 값으로 인해 {rows_before - len(df_stock_processed)} 행 제거됨.")
+    if df_stock_processed["Close"].isnull().any():
+        rows_before = len(df_stock_processed)
+        df_stock_processed.dropna(subset=["Close"], inplace=True)
+        logging.warning(f"SA - {ticker}: 'Close' 컬럼 NaN 값으로 인해 {rows_before - len(df_stock_processed)} 행 제거됨 (Prophet).")
+    if df_stock_processed.empty:
+        logging.error(f"SA - {ticker}: 'Close'가 유효한 데이터가 없습니다 (Prophet).")
+        return None, None, None, 0.0
 
-        if df_stock_processed.empty:
-            logging.error(f"{ticker}: 'Close'가 유효한 데이터가 없습니다.")
-            return None, None, None
-        logging.info(f"{ticker}: 초기 주가 데이터 로딩 및 기본 처리 완료 (Shape: {df_stock_processed.shape}).")
+    logging.info(f"SA - {ticker}: Finnhub 초기 주가 데이터 로딩 및 기본 처리 완료 (Shape: {df_stock_processed.shape}).")
 
-    except Exception as get_data_err:
-        logging.error(f"{ticker}: 초기 주가 로딩/처리 중 오류: {get_data_err}")
-        return None, None, None
-
-    # 2. 매크로 데이터 로딩 및 병합
-    df_macro = get_macro_data(start_date=start_date, end_date=end_date, fred_key=fred_key)
-    macro_cols = ["VIX", "US10Y", "US13W", "DXY", "FedFunds"]
-    df_merged = df_stock_processed # 기본값은 주가 데이터만
-
-    if not df_macro.empty:
-        try:
-            df_macro['Date'] = pd.to_datetime(df_macro['Date'])
-            # 주가 데이터프레임과 매크로 데이터프레임 병합 (Date 기준, left join)
-            df_merged = pd.merge(df_stock_processed, df_macro, on="Date", how="left")
-            logging.info(f"{ticker}: 주가/매크로 데이터 병합 완료.")
-            # 매크로 변수 NaN 처리 (ffill -> bfill)
-            for col in macro_cols:
-                if col in df_merged.columns:
-                    df_merged[col] = pd.to_numeric(df_merged[col], errors='coerce').ffill().bfill()
-            logging.info(f"{ticker}: 매크로 변수 NaN 처리 완료.")
-        except Exception as merge_err:
-            logging.error(f"{ticker}: 데이터 병합 오류: {merge_err}")
-            # 병합 실패 시 df_merged는 이전 값(df_stock_processed) 유지됨
-            logging.warning(f"{ticker}: 매크로 병합 실패. 주가 데이터만 사용하여 진행.")
+    # 2. 매크로 데이터 로딩 및 병합 (FRED는 유지)
+    df_macro = get_macro_data(start_date_str, end_date_str, fred_key_param)
+    macro_cols_available_for_prophet = []
+    if df_macro is not None and not df_macro.empty:
+        df_merged = pd.merge(df_stock_processed, df_macro, on="Date", how="left")
+        logging.info(f"SA - {ticker}: 주가/매크로 데이터 병합 완료 (Prophet).")
+        # 사용할 매크로 컬럼 (FRED에서 온 것들)
+        fred_regressors = [col for col in df_macro.columns if col != 'Date']
+        for col in fred_regressors:
+            if col in df_merged.columns:
+                df_merged[col] = pd.to_numeric(df_merged[col], errors='coerce').ffill().bfill()
+                if not df_merged[col].isnull().any(): # NaN 없는 유효한 Regressor만 추가
+                    macro_cols_available_for_prophet.append(col)
+        logging.info(f"SA - {ticker}: 매크로 변수 NaN 처리 완료 (Prophet). 사용 가능 Regressor: {macro_cols_available_for_prophet}")
     else:
-        logging.warning(f"{ticker}: 매크로 데이터 없음. 주가 데이터만 사용.")
-        # df_merged는 이미 df_stock_processed로 설정됨
+        df_merged = df_stock_processed # 매크로 없으면 주가 데이터만 사용
+        logging.warning(f"SA - {ticker}: 매크로 데이터 없음. 주가 데이터만 사용 (Prophet).")
 
-    # 3. 기술적 지표 계산
-    logging.info(f"{ticker}: 기술적 지표 계산 시작...")
-    tech_indicators_to_add = [] # 최종적으로 Regressor로 사용할 컬럼 리스트
+
+    # 3. 기술적 지표 계산 (pandas_ta 사용)
+    tech_indicators_to_add_prophet = []
     try:
-        # pandas_ta 사용 시 필요한 컬럼명 확인 및 전달 (yfinance 기준 대문자 시작)
-        df_merged.ta.rsi(close='Close', length=14, append=True)
-        df_merged.ta.macd(close='Close', fast=12, slow=26, signal=9, append=True)
-        logging.info(f"{ticker}: RSI, MACD 계산 완료.")
+        df_merged.ta.rsi(close='Close', length=14, append=True, col_names=('RSI_14_Prophet'))
+        df_merged.ta.macd(close='Close', fast=12, slow=26, signal=9, append=True, col_names=('MACD_12_26_9_Prophet', 'MACDh_12_26_9_Prophet', 'MACDs_12_26_9_Prophet'))
+        logging.info(f"SA - {ticker}: RSI, MACD 계산 완료 (Prophet).")
 
-        tech_indicators_candidates = ['RSI_14', 'MACDs_12_26_9'] # 사용하려는 기술 지표 컬럼명
-
-        # 생성된 컬럼 존재 확인 및 NaN 처리
-        for ti in tech_indicators_candidates:
+        # MACD는 선만 사용 (MACD_12_26_9_Prophet)
+        tech_candidates_prophet = ['RSI_14_Prophet', 'MACDs_12_26_9_Prophet'] # 컬럼명에 _Prophet 추가하여 구분
+        for ti in tech_candidates_prophet:
             if ti in df_merged.columns:
-                if df_merged[ti].isnull().any(): # NaN이 있다면 ffill/bfill
-                    logging.info(f"{ticker}: 기술 지표 '{ti}'의 초기 NaN 값을 ffill/bfill 처리합니다.")
-                    df_merged[ti] = df_merged[ti].ffill().bfill()
-                # 처리 후에도 NaN이 남아 있는지 최종 확인
-                if df_merged[ti].isnull().any():
-                    logging.warning(f"{ticker}: 기술 지표 '{ti}'에 처리 후에도 NaN 존재하여 Regressor에서 제외합니다.")
+                df_merged[ti] = df_merged[ti].ffill().bfill() # NaN 처리
+                if not df_merged[ti].isnull().any():
+                    tech_indicators_to_add_prophet.append(ti)
                 else:
-                    tech_indicators_to_add.append(ti) # 유효한 경우에만 추가
+                    logging.warning(f"SA - {ticker}: 기술 지표 '{ti}'에 처리 후에도 NaN 존재하여 Regressor에서 제외 (Prophet).")
             else:
-                logging.warning(f"{ticker}: 기술 지표 '{ti}'가 생성되지 않았습니다.")
+                logging.warning(f"SA - {ticker}: 기술 지표 '{ti}'가 생성되지 않았습니다 (Prophet).")
     except Exception as ta_err:
-        logging.error(f"{ticker}: 기술적 지표 계산 중 오류: {ta_err}")
-        tech_indicators_to_add = [] # 오류 시 빈 리스트 유지
+        logging.error(f"SA - {ticker}: 기술적 지표 계산 중 오류 (Prophet): {ta_err}")
+        tech_indicators_to_add_prophet = []
 
     # 4. 최종 데이터 검증 및 Prophet 준비
-    if df_merged.empty or len(df_merged) < 30: # 데이터 최소 길이 체크
-        logging.error(f"Prophet 실패: 최종 데이터 부족({len(df_merged)}).")
-        return None, None, None
+    if df_merged.empty or len(df_merged) < 30:
+        logging.error(f"SA - Prophet 실패: 최종 데이터 부족({len(df_merged)}).")
+        return None, None, None, 0.0
 
-    logging.info(f"Prophet 학습 데이터 준비 완료 (Shape: {df_merged.shape})")
-    os.makedirs(DATA_FOLDER, exist_ok=True)
-    data_csv = os.path.join(DATA_FOLDER, f"{ticker}_prophet_tech_input_cp{changepoint_prior_scale}.csv") # 파일명에 파라미터 포함
-    try:
-        df_merged.to_csv(data_csv, index=False)
-        logging.info(f"Prophet 학습 데이터 저장 완료: {data_csv}")
-    except Exception as e:
-        logging.error(f"학습 데이터 저장 실패: {e}")
+    df_prophet_input = df_merged.rename(columns={"Date": "ds", "Close": "y"})
+    df_prophet_input['ds'] = pd.to_datetime(df_prophet_input['ds'])
 
-    # --- Prophet 모델링 (Regressor + changepoint_prior_scale 적용) ---
-    # Prophet 입력 형식으로 변환 ('Date' -> 'ds', 'Close' -> 'y')
-    df_prophet = df_merged.rename(columns={"Date": "ds", "Close": "y"})
-    df_prophet['ds'] = pd.to_datetime(df_prophet['ds'])
+    m = Prophet(yearly_seasonality=True, weekly_seasonality=True, daily_seasonality=False, changepoint_prior_scale=changepoint_prior_scale)
 
-    # Prophet 모델 초기화 (파라미터 적용)
-    m = Prophet(
-        yearly_seasonality=True,
-        weekly_seasonality=True,
-        daily_seasonality=False,
-        changepoint_prior_scale=changepoint_prior_scale # ⭐ 인자 사용
-    )
-
-    # Regressor 추가
-    all_regressors = []
-    # 매크로 변수 (NaN 없는지 확인 후 추가)
-    macro_cols_available = [col for col in macro_cols if col in df_prophet.columns and pd.api.types.is_numeric_dtype(df_prophet[col]) and df_prophet[col].isnull().sum() == 0]
-    if macro_cols_available:
-        for col in macro_cols_available: m.add_regressor(col)
-        all_regressors.extend(macro_cols_available)
-        logging.info(f"{ticker}: 매크로 Regressors 추가됨: {macro_cols_available}")
+    all_prophet_regressors = macro_cols_available_for_prophet + tech_indicators_to_add_prophet
+    if all_prophet_regressors:
+        for regressor in all_prophet_regressors:
+            if regressor in df_prophet_input.columns: # 최종 확인
+                 m.add_regressor(regressor)
+        logging.info(f"SA - {ticker}: Prophet Regressors 추가됨: {all_prophet_regressors}")
     else:
-        logging.info(f"{ticker}: 유효한 매크로 Regressor 없음.")
+        logging.info(f"SA - {ticker}: 유효한 Prophet Regressor 없음.")
 
-    # 기술 지표 변수 (NaN 처리 후 유효한 것만 추가)
-    if tech_indicators_to_add:
-        for col in tech_indicators_to_add: m.add_regressor(col)
-        all_regressors.extend(tech_indicators_to_add)
-        logging.info(f"{ticker}: 기술 지표 Regressors 추가됨: {tech_indicators_to_add}")
-    else:
-        logging.info(f"{ticker}: 유효한 기술 지표 Regressor 없음.")
 
     # 5. 학습, 예측, CV 실행
-    forecast_dict, fig_fcst, cv_path = None, None, None
+    forecast_dict, fig_fcst, cv_path, mape = None, None, None, 0.0 # mape 기본값 0.0
     try:
-        # 모델 학습
-        logging.info(f"{ticker}: Prophet 모델 학습 시작 (Regressors: {all_regressors})...")
-        m.fit(df_prophet[['ds', 'y'] + all_regressors])
-        logging.info(f"{ticker}: Prophet 학습 완료.")
+        logging.info(f"SA - {ticker}: Prophet 모델 학습 시작 (Regressors: {all_prophet_regressors})...")
+        m.fit(df_prophet_input[['ds', 'y'] + all_prophet_regressors]) # Regressor 포함하여 학습
+        logging.info(f"SA - {ticker}: Prophet 학습 완료.")
         os.makedirs(FORECAST_FOLDER, exist_ok=True)
 
-        # 교차 검증(CV) 실행
+        # CV (기존 로직 유지)
         try:
-            # CV 파라미터 동적 설정
-            data_len_days = (df_prophet['ds'].max() - df_prophet['ds'].min()).days
-            initial_cv_days = max(180, int(data_len_days * 0.5)) # 최소 180일 or 50%
-            period_cv_days = max(30, int(initial_cv_days * 0.2)) # initial의 20% or 최소 30일
-            horizon_cv_days = forecast_days # 예측 기간 동일하게 설정
+            data_len_days = (df_prophet_input['ds'].max() - df_prophet_input['ds'].min()).days
+            initial_cv_days = max(180, int(data_len_days * 0.5))
+            period_cv_days = max(30, int(initial_cv_days * 0.2))
+            horizon_cv_days = forecast_days
             initial_cv, period_cv, horizon_cv = f'{initial_cv_days} days', f'{period_cv_days} days', f'{horizon_cv_days} days'
 
-            # CV 실행 가능 여부 확인
-            if len(df_prophet) > initial_cv_days + horizon_cv_days + period_cv_days:
-                logging.info(f"Prophet CV 시작 (initial='{initial_cv}', period='{period_cv}', horizon='{horizon_cv}')...")
-                df_cv = cross_validation(m, initial=initial_cv, period=period_cv, horizon=horizon_cv, parallel=None)
-                logging.info("CV 완료.")
-                # CV 결과로 MAPE 계산
+            if len(df_prophet_input) > initial_cv_days + horizon_cv_days + period_cv_days:
+                df_cv = cross_validation(m, initial=initial_cv, period=period_cv, horizon=horizon_cv, parallel=None) # parallel=None 권장
                 df_p = performance_metrics(df_cv)
-                mape = df_p["mape"].mean() * 100  # % 단위로 변환
-                logging.info(f"Prophet CV 평균 MAPE: {mape:.2f}%")
-                # CV 결과 시각화 및 저장
+                mape = df_p["mape"].mean() * 100
+                logging.info(f"SA - Prophet CV 평균 MAPE ({ticker}): {mape:.2f}%")
                 fig_cv = plot_cross_validation_metric(df_cv, metric='mape')
-                plt.title(f'{ticker} CV MAPE (Params: cp={changepoint_prior_scale})')
-                cv_path = os.path.join(FORECAST_FOLDER, f"{ticker}_cv_mape_cp{changepoint_prior_scale}.png")
+                plt.title(f'{ticker} CV MAPE (Finnhub, cp={changepoint_prior_scale})')
+                cv_path = os.path.join(FORECAST_FOLDER, f"{ticker}_finnhub_cv_mape_cp{changepoint_prior_scale}.png")
                 fig_cv.savefig(cv_path)
                 plt.close(fig_cv)
-                logging.info(f"CV MAPE 차트 저장 완료: {cv_path}")
             else:
-                logging.warning(f"{ticker}: 데이터 기간 부족({len(df_prophet)}일 < {initial_cv_days+horizon_cv_days+period_cv_days}일)하여 CV를 건너<0xEB>니다.") # 수정: 건너<0xEB>니다
-                cv_path = None
+                logging.warning(f"SA - {ticker}: 데이터 기간 부족하여 Prophet CV 건너<0xEB>니다.")
+                cv_path = None; mape = 0.0 # CV 못하면 MAPE 0으로
         except Exception as cv_e:
-            logging.error(f"Prophet CV 중 오류 발생: {cv_e}")
-            cv_path = None
+            logging.error(f"SA - Prophet CV 중 오류 ({ticker}): {cv_e}")
+            cv_path = None; mape = 0.0
 
         # 미래 예측
-        logging.info("미래 예측 시작...")
         future = m.make_future_dataframe(periods=forecast_days)
-
-        # 미래 Regressor 값 처리
-        if all_regressors:
-            temp_m = df_prophet[['ds'] + all_regressors].copy() # 과거 데이터 사용
-            future = future.merge(temp_m, on='ds', how='left') # 일단 과거 값 붙이기
-            for col in all_regressors:
+        # 미래 Regressor 값 처리 (ffill 후 마지막 값으로 채우기)
+        if all_prophet_regressors:
+            temp_m_fh = df_prophet_input[['ds'] + all_prophet_regressors].copy()
+            future = future.merge(temp_m_fh, on='ds', how='left')
+            for col in all_prophet_regressors:
                 if col in future.columns:
-                    non_na_past = df_prophet[col].dropna() # 과거 데이터 기준 마지막 유효값
-                    last_val = non_na_past.iloc[-1] if not non_na_past.empty else 0
-                    if non_na_past.empty:
-                         logging.warning(f"Regressor '{col}'의 과거 값이 모두 NaN입니다. 미래 값을 0으로 채웁니다.")
-                    # 미래 기간(NaN)을 마지막 유효값으로 채움
-                    future[col] = future[col].ffill().fillna(last_val)
+                    last_valid_val = df_prophet_input[col].dropna().iloc[-1] if not df_prophet_input[col].dropna().empty else 0
+                    future[col] = future[col].ffill().fillna(last_valid_val)
 
-        # 예측 실행
         forecast = m.predict(future)
-        logging.info("미래 예측 완료.")
-
-        # 결과 저장 및 반환값 준비
-        csv_fn = os.path.join(FORECAST_FOLDER, f"{ticker}_forecast_cp{changepoint_prior_scale}.csv")
+        csv_fn = os.path.join(FORECAST_FOLDER, f"{ticker}_finnhub_forecast_cp{changepoint_prior_scale}.csv")
         forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].copy().assign(ds=lambda dfx: dfx['ds'].dt.strftime('%Y-%m-%d')).to_csv(csv_fn, index=False)
-        logging.info(f"예측 결과 데이터 저장 완료: {csv_fn}")
-
         fig_fcst = plot_plotly(m, forecast)
-        fig_fcst.update_layout(title=f'{ticker} Price Forecast (cp={changepoint_prior_scale})', margin=dict(l=20,r=20,t=40,b=20))
-        logging.info(f"예측 결과 Figure 생성 완료.")
-
+        fig_fcst.update_layout(title=f'{ticker} Price Forecast (Finnhub, cp={changepoint_prior_scale})', margin=dict(l=20,r=20,t=40,b=20))
         forecast_dict = forecast[['ds', 'yhat', 'yhat_lower', 'yhat_upper']].tail(forecast_days).to_dict('records')
         for rec in forecast_dict: rec['ds'] = rec['ds'].strftime('%Y-%m-%d')
 
         return forecast_dict, fig_fcst, cv_path, mape
     except Exception as e:
-        logging.error(f"Prophet 학습/예측 단계에서 오류 발생: {e}")
-        logging.error(traceback.format_exc())
-        return None, None, None
+        logging.error(f"SA - Prophet 학습/예측 단계에서 오류 발생 ({ticker}): {e}\n{traceback.format_exc()}")
+        return None, None, None, 0.0
 
-# --- 메인 분석 함수 ---
-# ⭐ analyze_stock 수정: changepoint_prior_scale 인자 추가 및 전달
-def analyze_stock(ticker, news_key, fred_key, analysis_period_years=2, forecast_days=30, num_trend_periods=4, changepoint_prior_scale=0.05): # 인자 추가됨
-    """모든 데이터를 종합하여 주식 분석 결과를 반환합니다."""
-    logging.info(f"--- {ticker} 주식 분석 시작 (changepoint_prior={changepoint_prior_scale}) ---")
-    output_results = {}
+
+# --- 메인 분석 함수 (Finnhub 적용) ---
+def analyze_stock(ticker, finnhub_client_param, news_api_key_unused, fred_api_key_param, # 파라미터명 변경
+                  analysis_period_years=2, forecast_days=30, num_trend_periods=4, changepoint_prior_scale=0.05):
+    logging.info(f"--- {ticker} Finnhub 주식 분석 시작 (cp_prior={changepoint_prior_scale}) ---")
+    output_results = {"error": None} # 오류 발생 시 여기에 메시지 기록
+
+    # Finnhub 클라이언트가 제대로 전달되었는지 확인
+    if not finnhub_client_param:
+        logging.error(f"SA - Finnhub 클라이언트가 analyze_stock 함수에 전달되지 않았습니다 ({ticker}).")
+        output_results["error"] = "Finnhub 클라이언트 설정 오류"
+        return output_results # 오류 상태로 즉시 반환
+
     try:
         end_date = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
         start_date = end_date - relativedelta(years=analysis_period_years)
         start_date_str = start_date.strftime("%Y-%m-%d")
         end_date_str = end_date.strftime("%Y-%m-%d")
-        logging.info(f"분석 기간: {start_date_str} ~ {end_date_str}")
     except Exception as e:
-        logging.error(f"날짜 설정 오류: {e}")
-        return {"error": f"날짜 설정 오류: {e}"}
+        logging.error(f"SA - 날짜 설정 오류: {e}")
+        output_results["error"] = f"날짜 설정 오류: {e}"
+        return output_results
 
-    # 주가 데이터 로드
-    df_stock_full = get_stock_data(ticker, start_date=start_date_str, end_date=end_date_str)
+    # 주가 데이터 로드 (Finnhub)
+    df_stock_full = get_finnhub_stock_data(finnhub_client_param, ticker, "D", start_date_str, end_date_str)
     stock_data_valid = df_stock_full is not None and not df_stock_full.empty
 
-    # 현재 가격 및 데이터 포인트 기록
     if stock_data_valid:
         output_results['current_price'] = f"{df_stock_full['Close'].iloc[-1]:.2f}" if not df_stock_full['Close'].empty and pd.notna(df_stock_full['Close'].iloc[-1]) else "N/A"
         output_results['data_points'] = len(df_stock_full)
     else:
-        output_results['current_price'] = "N/A"
-        output_results['data_points'] = 0
-        logging.warning(f"{ticker}: 분석 기간 내 유효한 주가 정보 없음.")
+        output_results['current_price'] = "N/A"; output_results['data_points'] = 0
+        logging.warning(f"SA - {ticker}: Finnhub 분석 기간 내 유효 주가 정보 없음.")
+        # 주가 데이터 없으면 많은 분석 불가, 하지만 일부 정보(펀더멘탈 등)는 시도 가능
 
     output_results['analysis_period_start'] = start_date_str
     output_results['analysis_period_end'] = end_date_str
 
-    # 각종 분석 실행 및 결과 저장
-    output_results['stock_chart_fig'] = plot_stock_chart(ticker, start_date=start_date_str, end_date=end_date_str) or None
-    output_results['fundamentals'] = get_fundamental_data(ticker) or {key: "N/A" for key in ["시가총액", "PER", "EPS", "배당수익률", "베타", "업종", "산업", "요약"]}
-    output_results['operating_margin_trend'] = get_operating_margin_trend(ticker, num_periods=num_trend_periods) or []
-    output_results['roe_trend'] = get_roe_trend(ticker, num_periods=num_trend_periods) or []
-    output_results['debt_to_equity_trend'] = get_debt_to_equity_trend(ticker, num_periods=num_trend_periods) or []
-    output_results['current_ratio_trend'] = get_current_ratio_trend(ticker, num_periods=num_trend_periods) or []
-    output_results['news_sentiment'] = get_news_sentiment(ticker, news_key) or ["뉴스 분석 실패"]
+    output_results['stock_chart_fig'] = plot_stock_chart_fh(finnhub_client_param, ticker, start_date_str, end_date_str, resolution="D")
+    output_results['fundamentals'] = get_fundamental_data_finnhub(finnhub_client_param, ticker)
+
+    # 재무 추세 (Finnhub basic financials 기반)
+    # app.py에서 사용하는 컬럼명과 일치시키도록 각 함수 내부에서 조정됨
+    output_results['operating_margin_trend'] = get_operating_margin_trend_fh(finnhub_client_param, ticker, num_periods) or []
+    output_results['roe_trend'] = get_roe_trend_fh(finnhub_client_param, ticker, num_periods) or []
+    output_results['debt_to_equity_trend'] = get_debt_to_equity_trend_fh(finnhub_client_param, ticker, num_periods) or []
+    output_results['current_ratio_trend'] = get_current_ratio_trend_fh(finnhub_client_param, ticker, num_periods) or []
+
+    output_results['news_sentiment'] = get_news_sentiment_finnhub(finnhub_client_param, ticker) or ["Finnhub 뉴스 분석 실패"]
     fg_value, fg_class = get_fear_greed_index()
     output_results['fear_greed_index'] = {'value': fg_value, 'classification': fg_class} if fg_value is not None else "N/A"
 
-    # Prophet 예측 실행 (데이터 유효하고 충분할 경우)
+    # Prophet 예측 (Finnhub 주가 데이터 사용)
     if stock_data_valid and output_results['data_points'] > 30:
-        # ⭐ run_prophet_forecast 호출 시 changepoint_prior_scale 전달
-        forecast_result = run_prophet_forecast(
-            ticker, start_date=start_date_str, end_date=end_date_str,
-            forecast_days=forecast_days, fred_key=fred_key,
-            changepoint_prior_scale=changepoint_prior_scale # 인자 전달
+        prophet_res = run_prophet_forecast_fh(
+            finnhub_client_param, ticker, start_date_str, end_date_str,
+            forecast_days, fred_api_key_param, changepoint_prior_scale
         )
-        # 결과 처리
-        if forecast_result and isinstance(forecast_result, tuple) and len(forecast_result) == 4:
-            fc_list, fc_fig, cv_path, mape = forecast_result
-            output_results['prophet_forecast'] = fc_list    or "예측 실패"
-            output_results['forecast_fig']    = fc_fig
-            output_results['cv_plot_path']    = cv_path
-            # MAPE 경고 플래그
-            output_results['mape']            = mape
-            output_results['warn_high_mape']  = (mape > 20)
+        if prophet_res and isinstance(prophet_res, tuple) and len(prophet_res) == 4:
+            fc_list, fc_fig, cv_path_fh, mape_fh = prophet_res
+            output_results['prophet_forecast'] = fc_list or "Finnhub 예측 실패"
+            output_results['forecast_fig'] = fc_fig
+            output_results['cv_plot_path'] = cv_path_fh
+            output_results['mape'] = mape_fh
+            output_results['warn_high_mape'] = (mape_fh > 20) if mape_fh is not None else False
         else:
-            output_results['prophet_forecast'] = "예측 실행 오류"
-            output_results['forecast_fig'] = None
-            output_results['cv_plot_path'] = None
-            logging.error(f"{ticker}: run_prophet_forecast 함수가 비정상적인 값을 반환했습니다.")
+            output_results['prophet_forecast'] = "Finnhub 예측 실행 오류"
+            output_results['forecast_fig'] = None; output_results['cv_plot_path'] = None
+            output_results['mape'] = 0.0; output_results['warn_high_mape'] = False
     else:
-        msg = f"데이터 부족({output_results['data_points']})" if output_results['data_points'] <= 30 else "주가 정보 없음"
-        output_results['prophet_forecast'] = f"{msg}으로 예측 불가"
-        output_results['forecast_fig'] = None
-        output_results['cv_plot_path'] = None
-        logging.warning(f"{ticker}: {msg} - Prophet 예측을 건너<0xEB>니다.") # 수정: 건너<0xEB>니다
+        msg = f"Finnhub 데이터 부족({output_results['data_points']})" if stock_data_valid else "Finnhub 주가 정보 없음"
+        output_results['prophet_forecast'] = f"{msg}으로 Finnhub 예측 불가"
+        output_results['forecast_fig'] = None; output_results['cv_plot_path'] = None
+        output_results['mape'] = 0.0; output_results['warn_high_mape'] = False
 
-    logging.info(f"--- {ticker} 주식 분석 완료 ---")
+    logging.info(f"--- {ticker} Finnhub 주식 분석 완료 ---")
     return output_results
 
-# --- 메인 실행 부분 (테스트용 - 최종 수정본) ---
+
+# --- 메인 실행 부분 (테스트용 - Finnhub 적용) ---
 if __name__ == "__main__":
-    print(f"stock_analysis.py 직접 실행 (테스트 목적, Base directory: {BASE_DIR}).")
-    target_ticker = "MSFT"
-    news_key = os.getenv("NEWS_API_KEY")
-    fred_key = os.getenv("FRED_API_KEY")
-    # 테스트 시 changepoint_prior_scale 값 설정
-    cps_test = 0.1
+    print(f"stock_analysis.py (Finnhub Version) 직접 실행 (테스트 목적, Base directory: {BASE_DIR}).")
+    # .env 파일에서 API 키 로드 시도 (테스트 실행 시)
+    dotenv_path_sa_main = os.path.join(BASE_DIR, '.env')
+    if os.path.exists(dotenv_path_sa_main):
+        load_dotenv(dotenv_path=dotenv_path_sa_main)
+        FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY") # 전역 변수 업데이트
+        FRED_API_KEY = os.getenv("FRED_API_KEY")       # 전역 변수 업데이트
+        NEWS_API_KEY_ORIGINAL = os.getenv("NEWS_API_KEY")
+        logging.info("SA - 테스트: .env 파일에서 API 키 로드 시도 완료.")
 
-    if not news_key or not fred_key:
-        print("경고: API 키 없음. 일부 기능(뉴스 분석, FRED 데이터)이 제한될 수 있습니다.")
-        # 키가 없어도 실행은 되도록 None 대신 빈 문자열 등 사용 가능
-        test_results = analyze_stock(
-            ticker=target_ticker, news_key=news_key, fred_key=fred_key,
-            analysis_period_years=1, forecast_days=15, num_trend_periods=5,
-            changepoint_prior_scale=cps_test # 테스트 값 전달
-        )
+    target_ticker_fh = "AAPL" # 테스트용 티커
+    cps_test_fh = 0.05
+
+    # Finnhub 클라이언트 초기화
+    test_finnhub_client = initialize_finnhub_client()
+
+    if not test_finnhub_client:
+        print("테스트 실패: Finnhub 클라이언트 초기화 불가. API 키를 확인하세요.")
     else:
-        print("API 키 로드됨. 모든 분석 기능 실행.")
-        test_results = analyze_stock(
-            ticker=target_ticker, news_key=news_key, fred_key=fred_key,
-            analysis_period_years=1, forecast_days=15, num_trend_periods=5,
-            changepoint_prior_scale=cps_test # 테스트 값 전달
+        print(f"Finnhub 클라이언트 사용 가능. {target_ticker_fh} 분석 테스트 시작...")
+        test_results_fh = analyze_stock(
+            ticker=target_ticker_fh,
+            finnhub_client_param=test_finnhub_client,
+            news_api_key_unused=NEWS_API_KEY_ORIGINAL, # Finnhub 뉴스 사용으로 이 키는 불필요
+            fred_api_key_param=FRED_API_KEY,
+            analysis_period_years=1, forecast_days=15, num_trend_periods=4,
+            changepoint_prior_scale=cps_test_fh
         )
 
-    print(f"\n--- 테스트 실행 결과 요약 (Changepoint Prior: {cps_test}) ---") # 설정값 명시
-    if test_results and isinstance(test_results, dict) and "error" not in test_results:
-        for key, value in test_results.items():
-            if 'fig' in key and value is not None:
-                print(f"- {key.replace('_',' ').title()}: Plotly Figure 생성됨 (표시 안 함)")
-            elif key == 'fundamentals' and isinstance(value, dict):
-                print("- Fundamentals:")
-                # 수정: 명확한 for loop 사용
-                for k, v in value.items():
-                    if k == '요약' and isinstance(v, str) and len(v) > 100:
-                        print(f"    - {k}: {v[:100]}...")
-                    else:
-                        print(f"    - {k}: {v}")
-            elif '_trend' in key and isinstance(value, list):
-                print(f"- {key.replace('_',' ').title()} ({len(value)} 분기):")
-                # 수정: 명확한 for loop 사용
-                for item in value[:3]: # 최대 3개 항목만 출력
-                    print(f"    - {item}")
-                if len(value) > 3: print("     ...")
-            elif key == 'prophet_forecast':
-                forecast_status = "예측 실패 또는 오류"
-                if isinstance(value, list) and value:
-                     forecast_status = f"{len(value)}일 예측 생성됨 (첫 날: {value[0]})"
-                elif isinstance(value, str):
-                     forecast_status = value
-                print(f"- Prophet Forecast: {forecast_status}")
-            elif key == 'news_sentiment':
-                news_status = "뉴스 분석 실패 또는 오류"
-                if isinstance(value, list) and value:
-                     news_status = f"{len(value)-1}개 뉴스 분석됨 (헤더: {value[0]})"
-                elif isinstance(value, list) and not value:
-                     news_status = "분석된 뉴스 없음"
-                print(f"- News Sentiment: {news_status}")
-            elif key == 'cv_plot_path':
-                 print(f"- Cv Plot Path: {value if value else '생성 안 됨'}")
-            else:
-                 print(f"- {key.replace('_',' ').title()}: {value}")
-    elif test_results and "error" in test_results:
-        print(f"분석 중 오류 발생: {test_results['error']}")
-    else:
-        print("테스트 분석 실패 (결과 없음 또는 알 수 없는 오류).")
+        print(f"\n--- Finnhub 테스트 실행 결과 요약 (Changepoint Prior: {cps_test_fh}) ---")
+        if test_results_fh and test_results_fh.get("error") is None:
+            for key, value in test_results_fh.items():
+                if key == "error": continue # 오류는 이미 위에서 처리
+                if 'fig' in key and value is not None and isinstance(value, go.Figure): # Figure 객체인지 확인
+                    print(f"- {key.replace('_',' ').title()}: Plotly Figure 생성됨 (표시 안 함)")
+                elif key == 'fundamentals' and isinstance(value, dict):
+                    print("- Fundamentals (Finnhub):")
+                    for k_f, v_f in value.items():
+                        if k_f == '요약' and isinstance(v_f, str) and len(v_f) > 60: print(f"    - {k_f}: {v_f[:60]}...")
+                        else: print(f"    - {k_f}: {v_f}")
+                elif '_trend' in key and isinstance(value, list):
+                    print(f"- {key.replace('_',' ').title()} ({len(value)} 기간, Finnhub):")
+                    for item_t in value[:2]: print(f"    - {item_t}") # 최대 2개만 출력
+                    if len(value) > 2: print("     ...")
+                elif key == 'prophet_forecast':
+                    status_pf = "예측 실패/오류"
+                    if isinstance(value, list) and value: status_pf = f"{len(value)}일 예측 생성 (첫 날: {value[0].get('ds')} ~ {value[0].get('yhat'):.2f})"
+                    elif isinstance(value, str): status_pf = value
+                    print(f"- Prophet Forecast (Finnhub): {status_pf}")
+                elif key == 'news_sentiment':
+                    status_ns = "뉴스 분석 실패/오류"
+                    if isinstance(value, list) and value: status_ns = f"{len(value)-1 if value[0].startswith('Finnhub 뉴스 감정 분석') else len(value)}개 뉴스/요약 (첫 줄: {value[0][:60]}...)"
+                    print(f"- News Sentiment (Finnhub): {status_ns}")
+                else:
+                    print(f"- {key.replace('_',' ').title()}: {value}")
+        elif test_results_fh and test_results_fh.get("error"):
+            print(f"분석 중 오류 발생: {test_results_fh['error']}")
+        else:
+            print("Finnhub 테스트 분석 실패 (결과 없음 또는 알 수 없는 오류).")
 
-    print("\n--- 테스트 실행 종료 ---")
+    print("\n--- Finnhub 테스트 실행 종료 ---")
