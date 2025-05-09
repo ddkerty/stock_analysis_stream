@@ -279,39 +279,47 @@ with st.sidebar:
 
 # --- 캐시된 종합 분석 함수 ---
 @st.cache_data(ttl=timedelta(hours=1))
-def run_cached_analysis(ticker_sa, finnhub_client_sa, fred_api_key_sa, years_sa, days_sa, num_trend_periods_sa, changepoint_prior_scale_sa):
+def run_cached_analysis(
+    ticker_sa: str,
+    _finnhub_client_sa,       # 언더스코어 붙인 인자
+    fred_api_key_sa: str,
+    years_sa: int,
+    days_sa: int,
+    num_trend_periods_sa: int,
+    changepoint_prior_scale_sa: float
+):
     """종합 분석 실행 및 결과 반환 (캐싱 적용, Finnhub 기반)"""
-    # news_api_key는 Finnhub 사용으로 불필요해짐
     try:
-        import stock_analysis as sa # stock_analysis.py 모듈 임포트
+        import stock_analysis as sa
     except ImportError as import_err:
-        return {"error": f"분석 모듈(stock_analysis.py) 로딩 오류: {import_err}."}
+        return {"error": f"분석 모듈 로딩 오류: {import_err}"}
     except Exception as e:
         return {"error": f"분석 모듈 로딩 중 예외 발생: {e}"}
 
-    logging.info(f"종합 분석 실행 (Finnhub): {ticker_sa}, {years_sa}년, {days_sa}일, {num_trend_periods_sa}기간, cp_prior={changepoint_prior_scale_sa}")
+    logging.info(
+        f"종합 분석 실행 (Finnhub): {ticker_sa}, {years_sa}년, "
+        f"{days_sa}일, {num_trend_periods_sa}기간, cp_prior={changepoint_prior_scale_sa}"
+    )
 
-    if not finnhub_client_sa: # Finnhub 클라이언트 없으면 분석 불가
-        logging.error("run_cached_analysis: Finnhub 클라이언트가 제공되지 않았습니다.")
-        return {"error": "Finnhub 클라이언트가 없어 종합 분석을 수행할 수 없습니다. API 키를 확인하세요."}
-    if not fred_api_key_sa: # FRED 키 없으면 경고만 하고 진행 (일부 기능 제한)
-        logging.warning(f"FRED API 키 없이 종합 분석 시도 (ticker: {ticker_sa}). 거시경제 분석 제한됨.")
+    if not _finnhub_client_sa:
+        logging.error("Finnhub 클라이언트 미제공, 종합 분석 불가")
+        return {"error": "Finnhub API 키 확인 필요 (클라이언트 미제공)"}
 
     try:
-        analysis_results = sa.analyze_stock(
+        return sa.analyze_stock(
             ticker=ticker_sa,
-            finnhub_client_param=finnhub_client_sa, # Finnhub 클라이언트 전달
-            news_api_key_unused=None,  # Finnhub 사용으로 이 인자는 더 이상 사용 안 함 (stock_analysis.py 정의에 맞춰 None 또는 삭제)
-            fred_api_key_param=fred_api_key_sa,     # FRED API 키 전달
+            finnhub_client_param=_finnhub_client_sa,
+            news_api_key_unused=None,
+            fred_api_key_param=fred_api_key_sa,
             analysis_period_years=years_sa,
             forecast_days=days_sa,
             num_trend_periods=num_trend_periods_sa,
-            changepoint_prior_scale=changepoint_prior_scale_sa
+            changepoint_prior_scale=changepoint_prior_scale_sa,
         )
-        return analysis_results
     except Exception as e:
-        logging.error(f"analyze_stock 함수 실행 중 오류 발생 (ticker: {ticker_sa}): {e}\n{traceback.format_exc()}")
+        logging.error(f"analyze_stock 실행 중 오류: {e}\n{traceback.format_exc()}")
         return {"error": f"종합 분석 중 오류 발생: {e}"}
+
 
 # --- 메인 화면 로직 ---
 if page == "📊 종합 분석":
@@ -342,8 +350,8 @@ if page == "📊 종합 분석":
                     # run_cached_analysis 호출 시 finnhub_client 전달
                     results = run_cached_analysis(
                         ticker_sa=ticker_proc,
-                        finnhub_client_sa=finnhub_client, # app.py에서 생성된 finnhub_client 전달
-                        fred_api_key_sa=FRED_API_KEY,     # app.py에서 로드된 FRED_API_KEY 전달
+                        _finnhub_client_sa=finnhub_client,
+                        fred_api_key_sa=FRED_API_KEY,
                         years_sa=years,
                         days_sa=days,
                         num_trend_periods_sa=periods,
