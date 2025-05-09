@@ -1,9 +1,9 @@
 # -*- coding: utf-8 -*-
 # Combined app.py V1.9.8 (Modified for Finnhub in Technical Analysis Tab)
 
-import streamlit as st
+import streamlit as st # Streamlit import가 가장 먼저 오는 것이 일반적
 import pandas as pd
-from datetime import datetime, timedelta, time # time 추가
+from datetime import datetime, timedelta, time
 from dateutil.relativedelta import relativedelta
 import os
 from dotenv import load_dotenv
@@ -18,6 +18,10 @@ import finnhub
 from ratelimit import limits, RateLimitException
 from backoff import on_exception, expo
 import time as time_module # time import 충돌 방지
+
+# --- Streamlit 페이지 설정 (가장 먼저 호출되어야 함) ---
+# 버전 업데이트 주석은 여기서도 유효
+st.set_page_config(page_title="종합 주식 분석 Finnhub 개인버전", layout="wide", initial_sidebar_state="expanded")
 
 # 기존 모듈 임포트
 try:
