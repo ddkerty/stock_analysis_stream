@@ -618,10 +618,10 @@ def run_prophet_forecast_fh(client, ticker, start_date_str, end_date_str=None, f
 
 
 # --- 메인 분석 함수 (Finnhub 적용) ---
-def analyze_stock(ticker, finnhub_client_param, news_api_key_unused, fred_api_key_param, # 파라미터명 변경
-                  analysis_period_years=2, forecast_days=30, num_trend_periods=4, changepoint_prior_scale=0.05):
+def analyze_stock(ticker, finnhub_client_param, news_api_key_unused, fred_api_key_param,
+                  analysis_period_years=2, forecast_days=30, num_trend_periods=4, changepoint_prior_scale=0.05): # num_trend_periods를 받음
     logging.info(f"--- {ticker} Finnhub 주식 분석 시작 (cp_prior={changepoint_prior_scale}) ---")
-    output_results = {"error": None} # 오류 발생 시 여기에 메시지 기록
+    output_results = {"error": None}
 
     # Finnhub 클라이언트가 제대로 전달되었는지 확인
     if not finnhub_client_param:
@@ -659,10 +659,10 @@ def analyze_stock(ticker, finnhub_client_param, news_api_key_unused, fred_api_ke
 
     # 재무 추세 (Finnhub basic financials 기반)
     # app.py에서 사용하는 컬럼명과 일치시키도록 각 함수 내부에서 조정됨
-    output_results['operating_margin_trend'] = get_operating_margin_trend_fh(finnhub_client_param, ticker, num_periods) or []
-    output_results['roe_trend'] = get_roe_trend_fh(finnhub_client_param, ticker, num_periods) or []
-    output_results['debt_to_equity_trend'] = get_debt_to_equity_trend_fh(finnhub_client_param, ticker, num_periods) or []
-    output_results['current_ratio_trend'] = get_current_ratio_trend_fh(finnhub_client_param, ticker, num_periods) or []
+    output_results['operating_margin_trend'] = get_operating_margin_trend_fh(finnhub_client_param, ticker, num_trend_periods) or [] # num_periods -> num_trend_periods로 변경
+    output_results['roe_trend'] = get_roe_trend_fh(finnhub_client_param, ticker, num_trend_periods) or [] # num_periods -> num_trend_periods로 변경
+    output_results['debt_to_equity_trend'] = get_debt_to_equity_trend_fh(finnhub_client_param, ticker, num_trend_periods) or [] # num_periods -> num_trend_periods로 변경
+    output_results['current_ratio_trend'] = get_current_ratio_trend_fh(finnhub_client_param, ticker, num_trend_periods) or [] # num_periods -> num_trend_periods로 변경
 
     output_results['news_sentiment'] = get_news_sentiment_finnhub(finnhub_client_param, ticker) or ["Finnhub 뉴스 분석 실패"]
     fg_value, fg_class = get_fear_greed_index()
