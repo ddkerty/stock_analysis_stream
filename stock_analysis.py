@@ -618,8 +618,15 @@ def run_prophet_forecast_fh(client, ticker, start_date_str, end_date_str=None, f
 
 
 # --- 메인 분석 함수 (Finnhub 적용) ---
-def analyze_stock(ticker, finnhub_client_param, news_api_key_unused, fred_api_key_param,
-                  analysis_period_years=2, forecast_days=30, num_trend_periods=4, changepoint_prior_scale=0.05): # num_trend_periods를 받음
+def analyze_stock(
+    ticker,
+    finnhub_client_param,
+    fred_api_key_param,
+    analysis_period_years=2,
+    forecast_days=30,
+    num_trend_periods=4,
+    changepoint_prior_scale=0.05
+):
     logging.info(f"--- {ticker} Finnhub 주식 분석 시작 (cp_prior={changepoint_prior_scale}) ---")
     output_results = {"error": None}
 
