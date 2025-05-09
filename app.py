@@ -309,7 +309,6 @@ def run_cached_analysis(
         return sa.analyze_stock(
             ticker=ticker_sa,
             finnhub_client_param=_finnhub_client_sa,
-            news_api_key_unused=None,
             fred_api_key_param=fred_api_key_sa,
             analysis_period_years=years_sa,
             forecast_days=days_sa,
@@ -333,7 +332,7 @@ if page == "📊 종합 분석":
 
     if analyze_button_main:
         ticker = st.session_state.get('main_ticker', "AAPL")
-        years = st.session_state.get('analysis_years', 2)
+        years = st.session_state.get('analysis_years', 1)
         days = st.session_state.get('forecast_days', 30)
         periods = st.session_state.get('num_trend_periods', 4)
         cp_prior = st.session_state.get('changepoint_prior', 0.05)
